@@ -41,6 +41,7 @@ const CFG_FILE = join(STORE, 'config.json')
 const DATA_DIR = join(STORE, 'owner')
 const TASK_FILE = join(DATA_DIR, 'tasks.json')
 const SEEN_FILE = join(DATA_DIR, 'seen.json')
+const AUTH_FILE = join(DATA_DIR, 'auth.json')
 
 const cfg = () => readJson(CFG_FILE, {}) || {}
 const today = () => new Date().toLocaleDateString('sv-SE')
@@ -339,17 +340,33 @@ async function handleOne({ message, bv, rpid, root, mentionId, dryRun, source = 
   return rec
 }
 
-async function tick({ dryRun, limit }) {
+async function tick({ dryRun, limit, force = false }) {
   const conf = cfg()
   const ownerUid = String(conf.ownerUid || '')
   if (!ownerUid) { log('没配置主人 UID，跳过'); return { ok: true, done: 0 } }
   if (conf.ownerTasksEnabled === false) { log('主人任务开关关着，跳过'); return { ok: true, done: 0 } }
+  // 登录失效时冷却 30 分钟，避免每 3 分钟刷一条同样的报错；手动「立即检查」可绕过
+  const auth = readJson(AUTH_FILE, null)
+  if (!force && auth && Number(auth.until) > Date.now()) {
+    log('bili-cli 登录已失效，暂停检查 @（重新扫码后点「立即检查 @」）')
+    return { ok: true, done: 0, authBlocked: true }
+  }
   const quota = Number(conf.ownerTaskPerDay) || 10
   const left = quota - tasksToday()
   if (left <= 0) { log(`今天的主人任务到上限（${quota}）`); return { ok: true, done: 0 } }
 
   const r = runBili(['feed', 'mentions', '--limit', '20'], { timeoutMs: 60_000 })
-  if (!r.ok) { log('拉 @ 失败：' + (r.error?.message || r.error?.code || '')); return { ok: false, done: 0, error: '拉 @ 失败' } }
+  if (!r.ok) {
+    const msg = r.error?.message || r.error?.code || ''
+    if (/-101|未登录|auth_expired/i.test(String(msg))) {
+      writeJson(AUTH_FILE, { until: Date.now() + 30 * 60_000, error: msg, at: new Date().toISOString() })
+      log('bili-cli 登录已失效：请在工作台「我的」扫码登录，之后点「立即检查 @」。长内容仍会留在工作台。')
+    } else {
+      log('拉 @ 失败：' + msg)
+    }
+    return { ok: false, done: 0, error: '拉 @ 失败' }
+  }
+  try { if (existsSync(AUTH_FILE)) writeJson(AUTH_FILE, {}) } catch { /* ignore */ }
   const items = r.data?.items || []
   const seen = loadSeen()
   const maxAge = (Number(conf.ownerTaskMaxAgeHours) || 72) * 3600_000
@@ -389,7 +406,7 @@ async function tick({ dryRun, limit }) {
 
 const dryRun = flag('dry-run')
 if (flag('tick')) {
-  tick({ dryRun, limit: Math.max(1, Number(arg('limit', 3)) || 3) }).then((r) => {
+  tick({ dryRun, limit: Math.max(1, Number(arg('limit', 3)) || 3), force: flag('force') }).then((r) => {
     if (!r.ok) process.exitCode = 1
   })
 } else if (arg('message', '')) {

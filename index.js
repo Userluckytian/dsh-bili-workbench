@@ -1125,7 +1125,7 @@ export function apply(ctx) {
       return sendJson(res, 200, { ok: true, tasks: tasks.slice(0, 30) })
     }
     if (req.method === 'POST' && path === '/owner/check') {
-      const r = await runEngine('owner-task.mjs', ['--tick'], 15 * 60_000)
+      const r = await runEngine('owner-task.mjs', ['--tick', '--force'], 15 * 60_000)
       return sendJson(res, 200, { ok: r.ok, log: String(r.text || '').slice(-2500) })
     }
 
