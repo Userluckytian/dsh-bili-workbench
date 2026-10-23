@@ -187,7 +187,7 @@ window.__ModuleLoader__.load({
 [data-wb-tier][data-tone="ok"], [data-wb-badge][data-tone="ok"]{background:rgba(59,130,246,.16);color:#1d4ed8;color:light-dark(#1d4ed8,#7aa7ff);border-color:rgba(59,130,246,.45);}
 [data-wb-tier][data-tone="skip"], [data-wb-badge][data-tone="skip"]{background:rgba(154,160,166,.14);color:#5b6166;color:light-dark(#5b6166,#9aa0a6);border-color:rgba(154,160,166,.35);}
 [data-wb-badge]{font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--wb-line);background:var(--wb-card2);color:var(--wb-dim);white-space:nowrap;}
-[data-wb-cmt]{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(245,158,11,.14);color:#b45309;color:light-dark(#b45309,#fbbf24);border:1px solid rgba(245,158,11,.4);}
+[data-wb-cmt]{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(245,158,11,.14);color:#b45309;color:light-dark(#b45309,#fbbf24);border:1px solid rgba(245,158,11,.4);white-space:nowrap;flex:none;}
 [data-wb-input]{width:100%;box-sizing:border-box;padding:8px 10px;border-radius:9px;font-size:12px;border:1px solid var(--wb-line);background:var(--wb-card2);color:var(--wb-tx);font-family:inherit;}
 [data-wb-input]:focus{outline:none;border-color:var(--wb-acc);}
 [data-wb-input][data-area]{resize:vertical;min-height:64px;line-height:19px;}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-10-23
+
+- 修复「已评论」标签在长标题旁被挤成两行的问题（`white-space: nowrap` + `flex: none`）
+- 更新 README 界面截图
+
 ## 0.3.1 — 2026-10-23
 
 - 修复远程安装后 `judge / plan / compose` 仍按本地目录结构 import `../../bili-op/llm.mjs`、导致 `ERR_MODULE_NOT_FOUND` 的问题
