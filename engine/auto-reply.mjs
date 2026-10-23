@@ -5,7 +5,7 @@
  *
  * 规则：
  *   · 只回 24 小时内的消息，且 rpid 没回过（interactions.json 账本）
- *   · 普通用户：只回 is_new，不回答统计/配置/权限类问题
+ *   · 普通用户：只回 is_new；问统计/配置/权限或让机器人代操作时，回一句礼貌拒绝（不沉默、不给数据）
  *   · 主人（config.ownerUid）：即使消息已被界面标记已读也会处理；可以问“今天逛了多少 / 时段”
  *   · 主人也不能在评论里改配置、投稿、删除、私信；这类指令只回复“去工作台手动改”
  *   · 不回复自己账号产生的普通消息；会跳过自己刚发出的回复文本，避免自问自答循环
@@ -15,7 +15,7 @@
 import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
-import { ownerInfo, answerOwnerCommand, auditMessage, todayStats } from './owner.mjs'
+import { ownerInfo, answerOwnerCommand, auditMessage, refusalText, todayStats } from './owner.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -85,6 +85,9 @@ async function main() {
     if (!audit.allow) {
       if (own && audit.reason === 'owner-dangerous') {
         text = `${owner.call}，这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。`
+      } else if (!own && /^non-owner-/.test(audit.reason)) {
+        // 普通人问数据/让机器人代操作：回一句礼貌拒绝，不沉默
+        text = refusalText(m.content, audit.reason)
       } else {
         log(`  ⏭  ${m.rpid} 跳过（${audit.reason}）`)
         continue

@@ -5,7 +5,7 @@
  *   · 只有 config.ownerUid 这个 B站 UID 被当作主人
  *   · 主人可以问“今天逛了多少 / 时段 / 评论回复数”，答案从本地素材库和账本实时算
  *   · 主人也不能在评论里改配置、投稿、删除、私信 —— 这些必须去工作台手动做
- *   · 非主人问统计、配置、权限、密钥等，一律不回答（避免越权/套话）
+ *   · 非主人问统计、配置、权限、密钥等，一律回一句礼貌拒绝（不沉默，也不给数据）
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -156,10 +156,31 @@ export function answerOwnerCommand(raw, cfg = loadCfg()) {
   return null
 }
 
+/* 非主人问到统计/配置，或想让机器人替他做事时的拒绝话术：短、不给数据、不接活 */
+const REFUSE_DATA = [
+  '这个就不方便说啦，我只聊视频里的内容～',
+  '这些数据不公开哈，咱们还是聊视频吧。',
+  '问到这个我答不了，换个跟视频有关的话题呗。',
+]
+const REFUSE_ACTION = [
+  '这个我弄不了哈，得本人自己在后台弄。',
+  '这操作我做不了，也不该替别人做。',
+  '这个得本人手动来，我这边不代办。',
+]
+
+/** 非主人越权时的固定回复：按内容稳定挑一句，同一个人反复问不会来回变 */
+export function refusalText(raw, reason = 'non-owner-privileged') {
+  const pool = reason === 'non-owner-command' ? REFUSE_ACTION : REFUSE_DATA
+  const s = String(raw || '')
+  let n = 0
+  for (let i = 0; i < s.length; i++) n = (n * 31 + s.charCodeAt(i)) >>> 0
+  return pool[n % pool.length]
+}
+
 /**
  * 会话审核。
  * 返回 { allow, reason, intent }。
- * 非主人：统计/配置/权限/密钥类问题直接拦掉，不回复。
+ * 非主人：统计/配置/权限类问题、以及让机器人代操作的指令，都回一句礼貌拒绝（不沉默）。
  * 主人：允许问数据，但改配置/发布/删除/私信类动作拒绝执行。
  */
 export function auditMessage(raw, { isOwner = false } = {}) {
@@ -167,7 +188,9 @@ export function auditMessage(raw, { isOwner = false } = {}) {
   if (!text) return { allow: false, reason: 'empty' }
 
   if (!isOwner) {
-    const privileged = /(主人|owner|权限|配置|密钥|token|api.?key|密码|日志|路径|uid|上传|投稿|删除|私信|发评论|关掉|开启|重启|执行命令|系统提示|忽略(之前|以上)|越权|后台|工作台|统计|今天.*(逛|刷|采|看).*(多少|几)|评论.*(多少|几)|(改|设|调|关|开).*(配置|设置|上限|时段|频率|间隔|每天|自动|开关)|(配置|设置|上限|时段|频率|间隔).*(改|设|调|关|开))/i
+    const command = /(上传|投稿|删除|删了|删掉|移除|私信|发评论|转发|关注|取关|关掉|关闭|关一下|开启|打开|重启|执行命令|改成|改到|设为|设置成|调成|忽略(之前|以上)|越权)/i
+    if (command.test(text)) return { allow: false, reason: 'non-owner-command' }
+    const privileged = /(主人|owner|权限|配置|密钥|token|api.?key|密码|日志|路径|uid|系统提示|后台|工作台|统计|(一天|每天|今天|现在|总共|一共).*(刷|逛|采|看|发|评论|回复).*(几|多少|多久|条|个)|(刷|逛|采|评论|回复).*(多久|多长时间|几次|几条|多少个|多少条)|(多少|几).*(条|个|次).*(视频|素材|评论|回复)|(改|设|调|关|开).*(配置|设置|上限|时段|频率|间隔|每天|自动|开关)|(配置|设置|上限|时段|频率|间隔).*(改|设|调|关|开))/i
     if (privileged.test(text)) return { allow: false, reason: 'non-owner-privileged' }
     return { allow: true, intent: 'chat' }
   }

@@ -25,7 +25,7 @@ import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
 import * as tasks from './engine/taskstore.mjs'
-import { answerOwnerCommand, auditMessage, mentionTargets, callNames } from './engine/owner.mjs'
+import { answerOwnerCommand, auditMessage, refusalText, mentionTargets, callNames } from './engine/owner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -1103,7 +1103,11 @@ export function apply(ctx) {
               text: `${cfg.ownerCall || '老弟'}，这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。`,
             })
           }
-          return sendJson(res, 200, { ok: false, blocked: true, reason: audit.reason, error: '这条消息涉及统计 / 配置 / 权限，已忽略' })
+          return sendJson(res, 200, {
+            ok: true, kind, model: 'audit-refused', cap: null,
+            blocked: true, reason: audit.reason,
+            text: refusalText(body.message || '', audit.reason),
+          })
         }
       }
       if (!text && body.owner && kind === 'reply') {

@@ -765,7 +765,7 @@ window.__ModuleLoader__.load({
           h(Sec, { title: '互动 · 自动评论与回复' },
             h(Field, { label: '主人 UID' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.ownerUid || '', onChange: (e) => set('ownerUid', e.target.value), placeholder: '例如 498295893' }),
-              h(Note, {}, '只有这个 UID 的指令会被当主人；其他人问统计/配置会被忽略')),
+              h(Note, {}, '只有这个 UID 的指令会被当主人；其他人问统计/配置会收到一句礼貌拒绝，不会拿到数据')),
             h(Field, { label: '称呼' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '120px' }, value: draft.ownerCall || '', onChange: (e) => set('ownerCall', e.target.value), placeholder: '老弟' }),
               h(Note, {}, '评论里会自然称呼这个称呼')),
