@@ -80,7 +80,11 @@ window.__ModuleLoader__.load({
       const pathRef = useRef(path)
       pathRef.current = path
       useEffect(() => {
-        if (!path || !auto) return
+        if (!path || !auto) {
+          // 清空：否则“收起”后旧数据还在，卡片/详情看起来关不掉
+          setSt({ loading: false, data: null, err: '' })
+          return
+        }
         let live = true
         setSt((s) => ({ ...s, loading: true, err: '' }))
         jget(path).then((r) => {
@@ -247,6 +251,11 @@ window.__ModuleLoader__.load({
 [data-wb-overlay]{position:absolute;inset:0;z-index:60;background:rgba(3,7,18,.9);display:flex;align-items:center;justify-content:center;padding:24px;}
 [data-wb-overlay] video{max-width:96%;max-height:88%;border-radius:12px;background:#000;}
 [data-wb-overlay] .x{position:absolute;top:14px;right:18px;font-size:22px;color:#fff;background:transparent;border:0;cursor:pointer;}
+[data-wb-empty]{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:46px 20px;border:1px dashed var(--wb-line);border-radius:12px;background:rgba(255,255,255,.012);text-align:center;}
+[data-wb-empty-ico]{font-size:40px;line-height:1;opacity:.5;filter:grayscale(.15);}
+[data-wb-empty-title]{font-size:14px;font-weight:600;color:var(--wb-tx);}
+[data-wb-empty-hint]{font-size:12px;line-height:1.7;color:var(--wb-dim2);max-width:440px;}
+[data-wb-empty] [data-wb-btn]{margin-top:4px;}
 [data-wb-kv]{font-size:11.5px;line-height:19px;color:var(--wb-dim2);word-break:break-all;}
 [data-wb-divider]{height:1px;background:var(--wb-line);margin:2px 0;}
 [data-wb-composer]{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid rgba(59,130,246,.35);border-radius:11px;background:rgba(59,130,246,.06);}
@@ -264,16 +273,21 @@ window.__ModuleLoader__.load({
       children)
     const Field = ({ label, children }) => h('div', { 'data-wb-field': '' }, h('span', {}, label), children)
     const Note = ({ children }) => h('div', { 'data-wb-note': '' }, children)
+    const Empty = ({ icon = '📭', title, hint, children }) => h('div', { 'data-wb-empty': '' },
+      h('div', { 'data-wb-empty-ico': '' }, icon),
+      title ? h('div', { 'data-wb-empty-title': '' }, title) : null,
+      hint ? h('div', { 'data-wb-empty-hint': '' }, hint) : null,
+      children || null)
     const Sec = ({ title, children, style }) => h('div', { 'data-wb-sec': '', style },
       title ? h('div', { 'data-wb-h': '' }, title) : null, children)
     const Err = ({ children }) => children ? h('div', { 'data-wb-err': '' }, children) : null
     const OkMsg = ({ children }) => children ? h('div', { 'data-wb-okmsg': '' }, children) : null
 
     /* ═══════════════════ ① 素材库 ═══════════════════ */
-    function StoreRow({ r, onDetail, onBasket, inBasket }) {
+    function StoreRow({ r, onDetail }) {
       const quotes = r.quotes || []
       const frames = r.frames || []
-      return h('div', { 'data-wb-mat': '' },
+      return h('div', { 'data-wb-mat': '', 'data-wb-bv': r.bvid },
         h('div', { 'data-wb-thumb': '' },
           h('img', { src: API + '/store/media?kind=cover&bv=' + r.bvid, alt: '', loading: 'lazy', onError: (e) => { e.target.style.display = 'none' } }),
           r.duration ? h('span', { 'data-wb-dur': '' }, fmtDur(r.duration)) : null),
@@ -301,12 +315,11 @@ window.__ModuleLoader__.load({
             : null,
           h('div', { 'data-wb-row': '' },
             h(Btn, { sm: true, onClick: () => onDetail(r.bvid) }, '逐字稿 / 详情'),
-            h(Btn, { sm: true, onClick: () => onBasket(r.bvid) }, inBasket ? '已加入创作篮' : '加入创作篮'),
             h('div', { 'data-wb-grow': '' }),
             r.stat ? h('span', { 'data-wb-meta': '' }, `播放 ${fmtNum(r.stat.view)} · 点赞 ${fmtNum(r.stat.like)}`) : null)))
     }
 
-    function TabStore({ basket, setBasket }) {
+    function TabStore() {
       const [q, setQ] = useState('')
       const [view, setView] = useState('list')
       const [open, setOpen] = useState('')
@@ -321,8 +334,6 @@ window.__ModuleLoader__.load({
       const rec = detail.data?.record
       const sub = detail.data?.subtitles
 
-      const toggleBasket = (bv) => setBasket(basket.includes(bv) ? basket.filter((x) => x !== bv) : [...basket, bv])
-
       return h('div', { 'data-wb-page': '' },
         h(PageHead, { title: '素材库', sub: '从视频里收集的素材：点评 + 时间点片段 + 关键帧' },
           h('input', { 'data-wb-search': '', style: { maxWidth: '260px' }, placeholder: '在库里搜标题 / 点评 / 金句…', value: q, onChange: (e) => setQ(e.target.value) }),
@@ -330,18 +341,20 @@ window.__ModuleLoader__.load({
           h(Btn, { sm: true, onClick: () => setView(view === 'list' ? 'cards' : 'list') }, view === 'list' ? '卡片视图' : '列表视图')),
         h('div', { 'data-wb-row': '' },
           h(Chip, {}, `库内 ${list.data?.stats?.videos ?? rows.length} 条 · ${list.data?.stats?.mb ?? '-'} MB`),
-          basket.length ? h(Chip, { ok: true }, `创作篮 ${basket.length}`) : null,
           h('div', { 'data-wb-grow': '' }),
           h(Note, {}, '素材库不显示档位标签 —— 档位只属于「刷B站」')),
         h(Err, {}, list.err),
         list.loading ? h('div', { 'data-wb-loading': '' }, '读素材库…') : null,
-        !list.loading && !rows.length ? h(Note, {}, q ? '没搜到 —— 换个词试试' : '库还是空的 —— 去「刷B站」采几条，或点「看懂视频」') : null,
+        !list.loading && !rows.length ? h(Empty, {
+          icon: q.trim() ? '🔍' : '📚',
+          title: q.trim() ? '没搜到' : '素材库还是空的',
+          hint: q.trim() ? '换个词试试，或者清空搜索框看全部。' : '去「刷B站」采几条，或在视频卡片上点「看懂视频」。',
+        }) : null,
 
         view === 'list'
           ? h('div', { 'data-wb-col': '' }, ...rows.map((r) => h(StoreRow, {
-            key: r.bvid, r, inBasket: basket.includes(r.bvid),
+            key: r.bvid, r,
             onDetail: (bv) => setOpen(open === bv ? '' : bv),
-            onBasket: toggleBasket,
           })))
           : h('div', { 'data-wb-grid': '' }, ...rows.map((r) => h('div', { key: r.bvid, 'data-wb-card': '' },
             h('div', { 'data-wb-cover': '' },
@@ -354,30 +367,38 @@ window.__ModuleLoader__.load({
               h('div', { 'data-wb-meta': '' }, [r.up?.name, `${(r.quotes || []).length} 条片段`].filter(Boolean).join(' · ')),
               (r.quotes || [])[0] ? h('div', { 'data-wb-note': '' }, `${mmss(r.quotes[0].t)}「${String(r.quotes[0].text).slice(0, 26)}」`) : null,
               h('div', { 'data-wb-row': '' },
-                h(Btn, { sm: true, onClick: () => setOpen(r.bvid) }, '详情'),
-                h(Btn, { sm: true, onClick: () => toggleBasket(r.bvid) }, basket.includes(r.bvid) ? '已加入' : '加入创作篮')))))),
+                h(Btn, { sm: true, onClick: () => setOpen(r.bvid) }, '详情')))))),
 
-        rec ? h(Sec, { title: '素材详情' },
-          h('div', { 'data-wb-row': '' },
-            h('div', { 'data-wb-cardtitle': '' }, rec.title),
-            rec.judge ? h(Tier, { t: rec.judge.tier }) : null,
-            rec.commented ? h('span', { 'data-wb-cmt': '' }, '已评论') : null,
-            h('div', { 'data-wb-grow': '' }),
-            h(Btn, { sm: true, onClick: () => setOpen('') }, '收起')),
-          h('div', { 'data-wb-meta': '' }, [rec.up?.name, fmtDur(rec.duration), rec.zone, dayOf(rec.fetchedAt)].filter(Boolean).join(' · ')),
-          rec.judge ? h('div', { 'data-wb-why': '' }, `判定：${rec.judge.tier} — ${rec.judge.why}`) : null,
-          (rec.memes || []).length ? h('div', { 'data-wb-meta': '' }, '热梗：' + rec.memes.join(' · ')) : null,
-          (rec.hotComments || []).length ? h('div', { 'data-wb-col': '' },
-            h('div', { 'data-wb-h': '' }, '热评'),
-            ...rec.hotComments.slice(0, 8).map((x, i) => h('div', { key: i, 'data-wb-note': '' }, `👍 ${x.like ?? 0} · ${x.user || ''}：${x.text}`))) : null,
-          (rec.hotDanmaku || []).length ? h('div', { 'data-wb-meta': '' }, '热门弹幕：' + rec.hotDanmaku.slice(0, 10).map((x) => `${x.text}(${x.count})`).join(' · ')) : null,
-          (rec.quotes || []).length ? h('div', { 'data-wb-col': '' },
-            h('div', { 'data-wb-h': '' }, `可用片段 ${rec.quotes.length} 条`),
-            h('div', { 'data-wb-quotes': '' }, ...rec.quotes.map((x, i) => h('div', { key: i, 'data-wb-quote': '' },
-              h('b', {}, mmss(x.t)), x.text, x.kind ? h('span', { 'data-wb-meta': '', style: { marginLeft: '6px' } }, `· ${x.kind}`) : null)))) : null,
-          sub?.items?.length ? h('div', { 'data-wb-col': '' },
-            h('div', { 'data-wb-h': '' }, `逐字稿（共 ${sub.total} 句，显示前 ${sub.items.length}）`),
-            h('pre', { 'data-wb-pre': '' }, sub.items.map((x) => `${mmss(x.from)} ${x.content}`).join('\n'))) : null) : null)
+        open ? h('div', {
+          'data-wb-overlay': '',
+          onClick: (e) => { if (e.target === e.currentTarget) setOpen('') },
+        },
+          h('button', { className: 'x', onClick: () => setOpen('') }, '✕'),
+          h('div', { 'data-wb-sec': '', style: { width: 'min(920px, 96%)', maxHeight: '88%', overflow: 'auto', margin: 0 } },
+            detail.loading ? h('div', { 'data-wb-loading': '' }, '读取详情…') : null,
+            detail.err ? h(Err, {}, detail.err) : null,
+            rec ? [
+              h('div', { 'data-wb-row': '' },
+                h('div', { 'data-wb-cardtitle': '' }, rec.title),
+                rec.judge ? h(Tier, { t: rec.judge.tier }) : null,
+                rec.commented ? h('span', { 'data-wb-cmt': '' }, '已评论') : null,
+                h('div', { 'data-wb-grow': '' }),
+                h(Btn, { sm: true, onClick: () => setOpen('') }, '收起')),
+              h('div', { 'data-wb-meta': '' }, [rec.up?.name, fmtDur(rec.duration), rec.zone, dayOf(rec.fetchedAt)].filter(Boolean).join(' · ')),
+              rec.judge ? h('div', { 'data-wb-why': '' }, `判定：${rec.judge.tier} — ${rec.judge.why}`) : null,
+              (rec.memes || []).length ? h('div', { 'data-wb-meta': '' }, '热梗：' + rec.memes.join(' · ')) : null,
+              (rec.hotComments || []).length ? h('div', { 'data-wb-col': '' },
+                h('div', { 'data-wb-h': '' }, '热评'),
+                ...rec.hotComments.slice(0, 8).map((x, i) => h('div', { key: i, 'data-wb-note': '' }, `👍 ${x.like ?? 0} · ${x.user || ''}：${x.text}`))) : null,
+              (rec.hotDanmaku || []).length ? h('div', { 'data-wb-meta': '' }, '热门弹幕：' + rec.hotDanmaku.slice(0, 10).map((x) => `${x.text}(${x.count})`).join(' · ')) : null,
+              (rec.quotes || []).length ? h('div', { 'data-wb-col': '' },
+                h('div', { 'data-wb-h': '' }, `可用片段 ${rec.quotes.length} 条`),
+                h('div', { 'data-wb-quotes': '' }, ...rec.quotes.map((x, i) => h('div', { key: i, 'data-wb-quote': '' },
+                  h('b', {}, mmss(x.t)), x.text, x.kind ? h('span', { 'data-wb-meta': '', style: { marginLeft: '6px' } }, `· ${x.kind}`) : null)))) : null,
+              sub?.items?.length ? h('div', { 'data-wb-col': '' },
+                h('div', { 'data-wb-h': '' }, `逐字稿（共 ${sub.total} 句，显示前 ${sub.items.length}）`),
+                h('pre', { 'data-wb-pre': '' }, sub.items.map((x) => `${mmss(x.from)} ${x.content}`).join('\n'))) : null,
+            ] : null)) : null)
     }
 
     /* ═══════════════════ ② 刷B站 ═══════════════════ */
@@ -620,7 +641,11 @@ window.__ModuleLoader__.load({
           onClose: () => setComposer(null),
           onSent: () => { setComposer(null); inbox.reload(); onCommented?.() },
         }) : null,
-        !inbox.loading && !items.length ? h(Note, {}, inbox.data?.note || '没有新回复。') : null,
+        !inbox.loading && !items.length ? h(Empty, {
+          icon: '💬',
+          title: '没有新消息',
+          hint: inbox.data?.note || '有人回复、@ 你或私信你时，会出现在这里。',
+        }) : null,
         ...items.map((m, i) => h('div', { key: i, 'data-wb-sec': '' },
           h('div', { 'data-wb-row': '' },
             h(Chip, {}, '回复'),
@@ -761,7 +786,7 @@ window.__ModuleLoader__.load({
         h(Err, {}, cfgRes.err))
     }
 
-    function TabScroll({ basket }) {
+    function TabScroll() {
       const [sub, setSub] = useState('video')
       const [running, setRunning] = useState(false)
       const [runMsg, setRunMsg] = useState('')
@@ -797,15 +822,14 @@ window.__ModuleLoader__.load({
         runMsg ? h(Note, {}, runMsg) : null,
         h('div', { 'data-wb-row': '' },
           ...[['video', '视频'], ['msg', '消息'], ['set', '刷B站设置']].map(([k, l]) =>
-            h('button', { key: k, 'data-wb-btn': '', 'data-sm': '', 'data-primary': sub === k ? '' : undefined, onClick: () => setSub(k) }, l)),
-          sub === 'video' && basket.length ? h(Chip, {}, `创作篮 ${basket.length}`) : null),
+            h('button', { key: k, 'data-wb-btn': '', 'data-sm': '', 'data-primary': sub === k ? '' : undefined, onClick: () => setSub(k) }, l))),
         sub === 'video' ? h(SubVideo, { storeMap, cfg: cfgRes.data?.config, onCommented: store.reload, onKeywordsChanged: cfgRes.reload }) : null,
         sub === 'msg' ? h(SubInbox, { onCommented: store.reload, cfg: cfgRes.data?.config }) : null,
         sub === 'set' ? h(SubSettings, { onRunRound: () => store.reload(), onSaved: cfgRes.reload }) : null)
     }
 
     /* ═══════════════════ ③ 创作 / 出片 ═══════════════════ */
-    function ProjectCard({ p, basket, onChange }) {
+    function ProjectCard({ p, onChange }) {
       const [inst, setInst] = useState('')
       const [busy, setBusy] = useState('')
       const [msg, setMsg] = useState('')
@@ -913,7 +937,7 @@ window.__ModuleLoader__.load({
             style: delArmed ? { color: '#f87171', borderColor: 'rgba(248,113,113,.5)' } : undefined,
           }, busy === 'del' ? '删除中…' : delArmed ? '确认删除？' : '删除方案'),
           h('div', { 'data-wb-grow': '' }),
-          h('span', { 'data-wb-meta': '' }, `引用素材 ${picks.length} 处${basket.length ? ` · 创作篮 ${basket.length}` : ''}`)),
+          h('span', { 'data-wb-meta': '' }, `引用素材 ${picks.length} 处`)),
         showShots ? h('div', { 'data-wb-col': '' }, ...shots.map((s, i) => h('div', { key: i, 'data-wb-quote': '' },
           h('b', {}, `${i + 1}. ${s.kind}`), ' ', s.headline || '', s.body ? ` — ${s.body}` : '',
           h('div', { 'data-wb-meta': '', style: { marginTop: '3px' } },
@@ -991,7 +1015,7 @@ window.__ModuleLoader__.load({
         msg ? h(Note, {}, msg) : null)
     }
 
-    function TabCreate({ basket, setBasket }) {
+    function TabCreate() {
       const [brief, setBrief] = useState('')
       const [busy, setBusy] = useState('')
       const [log, setLog] = useState('')
@@ -1025,8 +1049,7 @@ window.__ModuleLoader__.load({
           }),
           h('div', { 'data-wb-row': '' },
             h(Btn, { primary: true, disabled: busy === 'go' || !brief.trim(), onClick: go }, busy === 'go' ? '创建任务中…' : '让 AI 开始'),
-            h('span', { 'data-wb-note': '' }, '库里有料就直接写方案；不够就自己去刷B站，可以等几天（Ctrl+Enter 发送）'),
-            basket.length ? h('span', { 'data-wb-note': '' }, `创作篮里还有 ${basket.length} 条，可以在下面手动指认`) : null),
+            h('span', { 'data-wb-note': '' }, '附加提示词：库里有料就直接写方案；不够就自己去刷B站，可以等几天（Ctrl+Enter 发送）')),
           log ? h('pre', { 'data-wb-pre': '' }, log) : null),
         taskRows.length ? h(Sec, { title: `任务${activeTasks ? `（${activeTasks} 个进行中）` : ''}` },
           h(Note, {}, '素材不够时按关键词自己去「刷B站」找；够料后自动写方案。不会自动渲染、不会自动投稿。'),
@@ -1040,17 +1063,15 @@ window.__ModuleLoader__.load({
         h(Note, {}, '删除方案只删方案本身；已经渲染的成片会留在「审核 / 发布」，可以在那边单独删除。'),
         h(Err, {}, list.err),
         list.loading ? h('div', { 'data-wb-loading': '' }, '读方案…') : null,
-        !list.loading && !projects.length ? h(Note, {}, '还没有方案 —— 上面写一句需求，让 AI 开始') : null,
+        !list.loading && !projects.length ? h(Empty, {
+          icon: '✍️',
+          title: '还没有方案',
+          hint: '在上面写一句需求，点「让 AI 开始」。素材不够时它会自己去「刷B站」找。',
+        }) : null,
         h('div', { 'data-wb-col': '' }, ...projects.map((p) => h(ProjectCard, {
-          key: p.id, p, basket, onChange: list.reload,
+          key: p.id, p, onChange: list.reload,
         }))),
-        h(Sec, { title: '创作篮（手动指定素材，可选）' },
-          basket.length
-            ? h('div', { 'data-wb-row': '' },
-              ...basket.map((bv) => h(Chip, { key: bv }, bv)),
-              h(Btn, { sm: true, onClick: () => setBasket([]) }, '清空'))
-            : h(Note, {}, '没选料也行 —— 上面那句需求足够它自己去库里找。'),
-          h(Note, {}, '出片设置（音色 / 时长 / 是否用真实帧）在「刷B站 → 设置」和每张卡片的「开始渲染」里调。')))
+        h(Note, {}, '出片设置（音色 / 时长 / 是否用真实帧）在「刷B站 → 设置」和每张卡片的「开始渲染」里调。'))
     }
 
     /* ═══════════════════ ④ 审核 / 发布 ═══════════════════ */
@@ -1102,9 +1123,7 @@ window.__ModuleLoader__.load({
         setBusy(run.runId + 'del')
         const r = await jpost('/review/delete', { runId: run.runId })
         setBusy('')
-        setDump(r.ok
-          ? `已删除本地成片：${run.runId}\n（B站已发布的内容不受影响）`
-          : ('失败：' + (errText(r) || '')))
+        setDump(r.ok ? '' : ('删除失败：' + (errText(r) || '')))
         list.reload()
       }
       return h('div', { 'data-wb-page': '' },
@@ -1115,7 +1134,11 @@ window.__ModuleLoader__.load({
         h(Note, {}, '「删除成片」只清本地文件，不会删除 B站 上已发布的内容；删除后项目回到草稿，可以重新渲染。'),
         dump ? h('pre', { 'data-wb-pre': '' }, dump) : null,
         list.loading ? h('div', { 'data-wb-loading': '' }, '读成片…') : null,
-        !list.loading && !runs.length ? h(Note, {}, '还没有成片 —— 去「创作/出片」渲染一期') : null,
+        !list.loading && !runs.length ? h(Empty, {
+          icon: '🎬',
+          title: '还没有成片',
+          hint: '去「创作 / 出片」写一句需求，渲染完成后会自动出现在这里。',
+        }) : null,
         h('div', { 'data-wb-grid': '' }, ...runs.map((r) => {
           const [label, tone] = stageOf(r.stage)
           const published = r.stage === 'published' || r.review?.state === 'published'
@@ -1318,7 +1341,6 @@ window.__ModuleLoader__.load({
     function Shell() {
       const [tab, setTab] = useState('store')
       const [collapsed, setCollapsed] = useState(false)
-      const [basket, setBasket] = useState([])
       return h('div', { 'data-wb-root': '', 'data-collapsed': collapsed ? '' : undefined },
         h('aside', { 'data-wb-rail': '' },
           h('div', { 'data-wb-brand': '' }, 'B站工作台', h('small', {}, '素材 → 出片 → 发布')),
@@ -1328,14 +1350,13 @@ window.__ModuleLoader__.load({
               onClick: () => setTab(k),
             },
             h('span', { className: 'ico' }, ico),
-            h('span', { 'data-wb-label': '' }, label),
-            k === 'create' && basket.length ? h('span', { className: 'badge' }, String(basket.length)) : null))),
+            h('span', { 'data-wb-label': '' }, label)))),
           h('div', { 'data-wb-rail-foot': '' },
             h('button', { 'data-wb-ghost': '', onClick: () => setCollapsed(!collapsed) }, collapsed ? '»' : '« 收起'))),
         h('main', { 'data-wb-main': '' },
-          tab === 'store' ? h(TabStore, { basket, setBasket }) : null,
-          tab === 'scroll' ? h(TabScroll, { basket }) : null,
-          tab === 'create' ? h(TabCreate, { basket, setBasket }) : null,
+          tab === 'store' ? h(TabStore) : null,
+          tab === 'scroll' ? h(TabScroll) : null,
+          tab === 'create' ? h(TabCreate) : null,
           tab === 'review' ? h(TabReview) : null,
           tab === 'mine' ? h(TabMine) : null))
     }
