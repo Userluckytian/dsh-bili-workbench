@@ -1037,6 +1037,7 @@ window.__ModuleLoader__.load({
           h(Note, {}, `共 ${projects.length} 个方案${anyRunning ? ' · 有项目在渲染' : ''}`),
           h('div', { 'data-wb-grow': '' }),
           h(Btn, { sm: true, onClick: list.reload }, '刷新')),
+        h(Note, {}, '删除方案只删方案本身；已经渲染的成片会留在「审核 / 发布」，可以在那边单独删除。'),
         h(Err, {}, list.err),
         list.loading ? h('div', { 'data-wb-loading': '' }, '读方案…') : null,
         !list.loading && !projects.length ? h(Note, {}, '还没有方案 —— 上面写一句需求，让 AI 开始') : null,
