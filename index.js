@@ -956,7 +956,9 @@ export function apply(ctx) {
 
     /* ══════════ 审核 / 发布 ══════════ */
     if (req.method === 'GET' && path === '/review/list') {
-      const runs = renders.listRuns().map((r) => ({ ...r, project: r.projectId ? plans.getProject(r.projectId) : null }))
+      const runs = renders.listRuns()
+        .filter((r) => r.hasVideo || ['rendered', 'approved', 'published', 'rejected'].includes(r.stage))
+        .map((r) => ({ ...r, project: r.projectId ? plans.getProject(r.projectId) : null }))
       return sendJson(res, 200, { ok: true, runs, publishEnabled: loadCfg().publishEnabled })
     }
     if (req.method === 'GET' && path === '/review/media') {
