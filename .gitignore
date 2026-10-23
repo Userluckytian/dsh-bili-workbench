@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# user data / secrets
+bili-store/
+bili-duty/
+config.json
+*.local
+.env
+.env.*
+
+# generated media
+bili-op/runs/
+bili-op/render/public/plans/
+bili-op/render/out/
+*.mp4
+*.mp3
+*.wav
+*.srt
+
+# logs / local launcher
+*.log
+last-url.txt
+launcher/
+
+# OS
+.DS_Store
+Thumbs.db

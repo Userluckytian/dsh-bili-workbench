@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Node syntax check
+        run: |
+          node --check index.js
+          node --check client.js
+          for f in engine/*.mjs bili-op/*.mjs scripts/*.mjs; do
+            node --check "$f"
+          done

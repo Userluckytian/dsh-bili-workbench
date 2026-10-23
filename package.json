@@ -1,0 +1,65 @@
+{
+  "name": "dsh-bili-workbench",
+  "version": "0.2.0",
+  "description": "DSH 插件：刷 B站 + 素材库 + AI 出片 + 审核发布 + 自动互动",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "workbench",
+    "remotion",
+    "ai"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "engine",
+    "bili-op",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md",
+    "CONTRIBUTORS.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.1",
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.538",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.538",
+    "sharp": "0.34.5"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

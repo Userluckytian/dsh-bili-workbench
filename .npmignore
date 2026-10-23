@@ -1,0 +1,11 @@
+docs/
+.github/
+PUBLISHING.md
+CHANGELOG.md
+bili-op/runs/
+bili-op/render/public/plans/
+bili-op/render/out/
+*.mp4
+*.mp3
+*.wav
+*.log
