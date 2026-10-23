@@ -58,7 +58,7 @@ npm install
 dsh plugin --profile web add "link:$PWD"
 ```
 
-### 方式 C：npm（如果已发布）
+### 方式 C：npm（暂未发布）
 
 ```bash
 dsh plugin --profile web add dsh-bili-workbench
