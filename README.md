@@ -2,6 +2,9 @@
 
 > 一个 **DSH（DeepSeek Harness）** 插件：把「刷 B站 / 素材库 / AI 出片 / 审核发布 / 自动互动」放进同一个工作台。
 
+[![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-blue)](https://github.com/topics/dsh-plugin)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 刷到的视频会落进素材库，出片引擎从库里取真实帧和金句；同一条视频只抓一次。不是又一个「B站信息流面板」，而是一条从**看**到**做**再到**发**的完整流水线。
 
 ![界面预览](docs/workbench.png)
