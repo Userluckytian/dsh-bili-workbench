@@ -124,8 +124,8 @@ export function todayStats(cfg = loadCfg()) {
   }
 }
 
-/** 主人指令 → 直接可发的答复；不是已知指令返回 null */
-export function answerOwnerCommand(raw, cfg = loadCfg()) {
+/** 主人指令 → 直接可发的答复 + 类型（stats / greeting / refuse）；不是已知指令返回 null */
+export function answerOwnerCommandDetailed(raw, cfg = loadCfg()) {
   const text = String(raw || '').trim()
   const s = todayStats(cfg)
   const { call } = ownerInfo(cfg)
@@ -134,26 +134,31 @@ export function answerOwnerCommand(raw, cfg = loadCfg()) {
 
   // 任何“改配置 / 发布 / 删除”类动作都不在评论里执行
   if (/(改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|打开|重启|删除|投稿|上传|私信|发评论|执行命令)/.test(compact)) {
-    return say('这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。')
+    return { text: say('这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。'), kind: 'refuse' }
   }
 
   if (/(时间|时段|多久|间隔|频率|上限|设定)/.test(compact)) {
-    return say(`时段 ${s.ranges}，每天上限 ${s.perDay} 条，约每 ${s.estMinutes} 分钟 1 条。今天已逛 ${s.todayVideos}/${s.target} 条。`)
+    return { text: say(`时段 ${s.ranges}，每天上限 ${s.perDay} 条，约每 ${s.estMinutes} 分钟 1 条。今天已逛 ${s.todayVideos}/${s.target} 条。`), kind: 'stats' }
   }
 
   if (/(今天|今日|现在).*(逛|刷|采|看|视频|素材).*(多少|几|条)|(逛|刷|采|看)了.*(多少|几)|多少.*(视频|素材)/.test(compact)) {
-    return say(`今天到现在逛了 ${s.todayVideos} 条，目标 ${s.target} 条（每天上限 ${s.perDay}）。评论 ${s.comments} 条，回复 ${s.replies} 条。`)
+    return { text: say(`今天到现在逛了 ${s.todayVideos} 条，目标 ${s.target} 条（每天上限 ${s.perDay}）。评论 ${s.comments} 条，回复 ${s.replies} 条。`), kind: 'stats' }
   }
 
   if (/(评论|回复).*(多少|几|条)/.test(compact)) {
-    return say(`今天评论 ${s.comments} 条、回复 ${s.replies} 条；上限 ${s.perDay} / ${s.replyPerDay === 0 ? '不限' : s.replyPerDay}。`)
+    return { text: say(`今天评论 ${s.comments} 条、回复 ${s.replies} 条；上限 ${s.perDay} / ${s.replyPerDay === 0 ? '不限' : s.replyPerDay}。`), kind: 'stats' }
   }
 
   if (/^(在吗|在不在|你好|嗨|hello|hi|你是谁|干嘛|干什么)/i.test(compact)) {
-    return say(`我在。今天已逛 ${s.todayVideos} 条，目标 ${s.target} 条。`)
+    return { text: say(`我在。今天已逛 ${s.todayVideos} 条，目标 ${s.target} 条。`), kind: 'greeting' }
   }
 
   return null
+}
+
+/** 兼容旧调用：只要文本 */
+export function answerOwnerCommand(raw, cfg = loadCfg()) {
+  return answerOwnerCommandDetailed(raw, cfg)?.text || null
 }
 
 /* 非主人问到统计/配置，或想让机器人替他做事时的拒绝话术：短、不给数据、不接活 */

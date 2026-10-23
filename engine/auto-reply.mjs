@@ -15,7 +15,8 @@
 import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
-import { ownerInfo, answerOwnerCommand, auditMessage, refusalText, todayStats } from './owner.mjs'
+import { ownerInfo, answerOwnerCommandDetailed, auditMessage, refusalText, todayStats } from './owner.mjs'
+import { voiceOwnerStats } from './owner-voice.mjs'
 import * as canon from './canon.mjs'
 
 const arg = (name, dflt) => {
@@ -94,9 +95,12 @@ async function main() {
         continue
       }
     } else if (own) {
-      const direct = answerOwnerCommand(m.content)
-      if (direct) {
-        text = direct
+      const cmd = answerOwnerCommandDetailed(m.content)
+      if (cmd) {
+        // 数据由本地脚本算好，再按人设改写；数字对不上会自动退回原句
+        text = cmd.kind === 'refuse'
+          ? cmd.text
+          : await voiceOwnerStats(cmd.text, { persona, ownerCall: owner.call })
       } else {
         try {
           const s = todayStats()

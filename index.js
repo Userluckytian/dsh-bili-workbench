@@ -25,7 +25,8 @@ import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
 import * as tasks from './engine/taskstore.mjs'
-import { answerOwnerCommand, auditMessage, refusalText, mentionTargets, callNames } from './engine/owner.mjs'
+import { answerOwnerCommandDetailed, auditMessage, refusalText, mentionTargets, callNames } from './engine/owner.mjs'
+import { voiceOwnerStats } from './engine/owner-voice.mjs'
 import * as canon from './engine/canon.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -1159,8 +1160,18 @@ export function apply(ctx) {
         }
       }
       if (!text && body.owner && kind === 'reply') {
-        const direct = answerOwnerCommand(body.message || '', cfg)
-        if (direct) return sendJson(res, 200, { ok: true, text: direct, model: 'owner-command', cap: null, kind })
+        const cmd = answerOwnerCommandDetailed(body.message || '', cfg)
+        if (cmd) {
+          // 数字先由本地脚本算准，再按人设改写；数字对不上就自动退回原句
+          let out = cmd.text
+          if (cmd.kind !== 'refuse') {
+            try { out = await voiceOwnerStats(cmd.text, { persona: cfg.personaPrompt, ownerCall: cfg.ownerCall }) } catch { /* 用原句 */ }
+          }
+          return sendJson(res, 200, {
+            ok: true, text: out, cap: null, kind,
+            model: cmd.kind === 'refuse' ? 'owner-command' : 'owner-command+voice',
+          })
+        }
       }
       if (!text) {
         const ctx = kind === 'comment'
