@@ -49,7 +49,11 @@ async function main() {
   if (!r.ok) { log('拉回复失败：' + (r.error?.message || r.error?.code || '')); return }
   const items = (r.data?.items || [])
   const db = interact.load()
-  const botTexts = new Set(Object.values(db.replied || {}).map((x) => String(x?.text || '').trim()).filter(Boolean))
+  const botTexts = new Set(
+    [...Object.values(db.replied || {}), ...Object.values(db.commented || {})]
+      .map((x) => String(x?.text || '').trim())
+      .filter(Boolean),
+  )
 
   const isOwner = (m) => Boolean(owner.uid && m.user?.mid && String(m.user.mid) === owner.uid)
   const isSelf = (m) => Boolean(myMid && m.user?.mid && String(m.user.mid) === myMid)

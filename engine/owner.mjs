@@ -139,12 +139,12 @@ export function auditMessage(raw, { isOwner = false } = {}) {
   if (!text) return { allow: false, reason: 'empty' }
 
   if (!isOwner) {
-    const privileged = /(主人|owner|权限|配置|设置|密钥|token|api.?key|密码|日志|路径|uid|上传|投稿|删除|私信|发评论|改|关掉|开启|重启|执行|命令|系统提示|忽略|越权|统计|今天.*(逛|刷|采|看).*(多少|几)|评论.*(多少|几))/i
+    const privileged = /(主人|owner|权限|配置|密钥|token|api.?key|密码|日志|路径|uid|上传|投稿|删除|私信|发评论|关掉|开启|重启|执行命令|系统提示|忽略(之前|以上)|越权|后台|工作台|统计|今天.*(逛|刷|采|看).*(多少|几)|评论.*(多少|几)|(改|设|调|关|开).*(配置|设置|上限|时段|频率|间隔|每天|自动|开关)|(配置|设置|上限|时段|频率|间隔).*(改|设|调|关|开))/i
     if (privileged.test(text)) return { allow: false, reason: 'non-owner-privileged' }
     return { allow: true, intent: 'chat' }
   }
 
-  const dangerous = /(改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|打开|重启|删除|投稿|上传|私信|发评论|执行|忽略.*(之前|以上)|系统提示|越权|token|api.?key|密钥|密码)/i
+  const dangerous = /(改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|重启|删除|投稿|上传|私信|发评论|执行命令|忽略(之前|以上)|系统提示|越权|token|api.?key|密钥|密码)/i
   if (dangerous.test(text)) return { allow: false, reason: 'owner-dangerous' }
   return { allow: true, intent: 'owner' }
 }
