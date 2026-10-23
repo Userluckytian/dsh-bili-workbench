@@ -76,6 +76,12 @@ const DEFAULTS = {
   mentionName: '',               // 额外 @ 谁；留空=主人 UID / 当前登录账号
   mentions: [],                  // [{ target: UID/昵称, call: 称呼 }]，可多人
   replyPerDay: 20,
+  /* 主人 @ 任务：看视频 / 看评论 / 要总结 */
+  ownerTasksEnabled: true,
+  ownerTaskPollMinutes: 3,       // 每几分钟看一次 @
+  ownerTaskPerDay: 10,           // 每天最多处理几个
+  ownerTaskAllowDm: true,        // 长总结用私信交付
+  ownerTaskMaxAgeHours: 72,      // 只处理 72 小时内的 @，避免首次启动把旧消息全跑一遍
   dmWatch: false,
   dmWatchMinutes: 5,
   dmReplyPerDay: 0,              // 0 = 不限条数（仍只回主人/互关）
@@ -194,6 +200,11 @@ function normalizeCfg(c) {
     .filter((m) => m.target)
     .slice(0, out.ownerUid ? 2 : 3)
   out.replyPerDay = clampNum(out.replyPerDay, 0, 200, 20)
+  out.ownerTasksEnabled = out.ownerTasksEnabled !== false
+  out.ownerTaskPollMinutes = clampNum(out.ownerTaskPollMinutes, 1, 60, 3)
+  out.ownerTaskPerDay = clampNum(out.ownerTaskPerDay, 1, 50, 10)
+  out.ownerTaskAllowDm = out.ownerTaskAllowDm !== false
+  out.ownerTaskMaxAgeHours = clampNum(out.ownerTaskMaxAgeHours, 1, 720, 72)
   out.dmWatch = Boolean(out.dmWatch)
   out.dmWatchMinutes = clampNum(out.dmWatchMinutes, 3, 240, 5)
   out.dmReplyPerDay = clampNum(out.dmReplyPerDay, 0, 100, 0)
@@ -1106,6 +1117,18 @@ export function apply(ctx) {
       return sendJson(res, 200, { ok: true, refreshed: true, status: canon.status() })
     }
 
+    /* ══════════ 主人 @ 任务（看视频 / 看评论 / 总结） ══════════ */
+    if (req.method === 'GET' && path === '/owner/tasks') {
+      const f = join(STORE, 'owner', 'tasks.json')
+      let tasks = []
+      try { tasks = JSON.parse(readFileSync(f, 'utf8'))?.tasks || [] } catch { tasks = [] }
+      return sendJson(res, 200, { ok: true, tasks: tasks.slice(0, 30) })
+    }
+    if (req.method === 'POST' && path === '/owner/check') {
+      const r = await runEngine('owner-task.mjs', ['--tick'], 15 * 60_000)
+      return sendJson(res, 200, { ok: r.ok, log: String(r.text || '').slice(-2500) })
+    }
+
     /* ══════════ 互动：预览 / dry-run / 受控发送 ══════════ */
     if (req.method === 'GET' && path === '/interact/state') {
       const cfg = loadCfg()
@@ -1229,6 +1252,7 @@ export function apply(ctx) {
         'personaPrompt', 'reportLevel', 'favFolderId',
         'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',
         'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay',
+        'ownerTasksEnabled', 'ownerTaskPollMinutes', 'ownerTaskPerDay', 'ownerTaskAllowDm', 'ownerTaskMaxAgeHours',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
         'voice', 'modelChain', 'concurrency',
         'publishEnabled', 'defaultTags', 'defaultZone',
@@ -1292,6 +1316,33 @@ export function apply(ctx) {
   try {
     setInterval(() => { canon.ensureFresh().catch(() => { /* 忽略 */ }) }, 6 * 3600_000)
   } catch { /* ignore */ }
+
+  /* ── 主人 @ 任务：每分钟看一眼是否到点（频率可配置） ── */
+  let ownerTaskRunning = false
+  let ownerTaskLast = 0
+  const ownerTick = async () => {
+    try {
+      const cfg = loadCfg()
+      if (!cfg.ownerTasksEnabled || !cfg.ownerUid) return
+      const every = Math.max(1, Number(cfg.ownerTaskPollMinutes) || 3) * 60_000
+      if (Date.now() - ownerTaskLast < every) return
+      if (ownerTaskRunning) return
+      ownerTaskRunning = true
+      ownerTaskLast = Date.now()
+      const r = await runEngine('owner-task.mjs', ['--tick'], 15 * 60_000)
+      if (!r.ok) log('主人 @ 任务失败：' + String(r.text || '').slice(-300))
+      else {
+        const m = /完成：处理 (\d+) 条/.exec(String(r.text || ''))
+        if (m && Number(m[1]) > 0) log(`主人 @ 任务：处理 ${m[1]} 条`)
+      }
+    } catch (e) {
+      log('主人 @ 任务异常：' + (e?.message ?? e))
+    } finally {
+      ownerTaskRunning = false
+    }
+  }
+  setTimeout(ownerTick, 60_000)
+  try { setInterval(ownerTick, 60_000) } catch { /* ignore */ }
 
   /* ── 采集定时器：按时段 + 每日上限平均分配，每分钟看一次 ── */
   try {

@@ -614,11 +614,23 @@ window.__ModuleLoader__.load({
 
     function SubInbox({ onCommented, cfg }) {
       const inbox = useApi('/inbox')
+      const ownerTasks = useApi('/owner/tasks')
       const [composer, setComposer] = useState(null)
+      const [taskOpen, setTaskOpen] = useState('')
+      const [taskMsg, setTaskMsg] = useState('')
       const items = inbox.data?.items || []
       const c = inbox.data?.counts || {}
       const ownerUid = String(cfg?.ownerUid || '')
       const isOwner = (m) => Boolean(ownerUid && m.user?.mid && String(m.user.mid) === ownerUid)
+      const taskStatus = (t) => ({ done: '完成', failed: '失败', stored: '已记录', chat: '已回复', 'need-bv': '等 BV' }[t.status] || t.status || '?')
+      const taskDelivery = (t) => (t.delivery || []).map((x) => ({ comment: '评论', dm: '私信', stored: '仅记录' }[x] || x)).join(' + ') || '仅记录'
+      const checkOwner = async () => {
+        setTaskMsg('检查 @ 中…（看视频 + 总结，可能要半分钟）')
+        const r = await jpost('/owner/check')
+        setTaskMsg(r.ok ? '检查完了' : '检查失败：' + String(r.log || '').slice(-200))
+        ownerTasks.reload()
+      }
+      const task = (ownerTasks.data?.tasks || []).find((t) => t.id === taskOpen)
 
       const replyTarget = (m) => ({
         kind: 'reply', label: m.user?.name || '',
@@ -644,6 +656,32 @@ window.__ModuleLoader__.load({
           h('div', { 'data-wb-grow': '' }),
           h(Btn, { sm: true, onClick: inbox.reload }, '刷新')),
         h(Note, {}, '默认由 AI 写草稿；发出前一定先给你看原文，默认 dry-run。'),
+        h('div', { 'data-wb-sec': '' },
+          h('div', { 'data-wb-row': '' },
+            h('b', {}, '主人请求'),
+            h('span', { 'data-wb-meta': '' }, `主人在评论区 @ 它看视频 / 看评论 / 要总结 · 自动检查 ${cfg?.ownerTasksEnabled === false ? '关' : '开'}`),
+            h('div', { 'data-wb-grow': '' }),
+            h(Btn, { sm: true, onClick: checkOwner }, '立即检查 @')),
+          h(Note, {}, '长内容默认私信交付，不塞评论区；说「别发评论区」就只私信，说「回评论区」就压成 ≤45 字。'),
+          taskMsg ? h(Note, {}, taskMsg) : null,
+          ...(ownerTasks.data?.tasks || []).slice(0, 6).map((t) => h('div', { key: t.id, 'data-wb-row': '' },
+            h(Chip, { ok: t.status === 'done' }, taskStatus(t)),
+            h('b', {}, t.title || t.bvid || '主人请求'),
+            h('span', { 'data-wb-meta': '' }, `${dayOf(t.at)} · ${taskDelivery(t)}`),
+            h('div', { 'data-wb-grow': '' }),
+            h(Btn, { sm: true, onClick: () => setTaskOpen(t.id) }, '查看'))),
+          !(ownerTasks.data?.tasks || []).length ? h(Note, {}, '还没有主人请求。在主人在视频评论里 @ 它，这里会出现。') : null),
+        task ? h('div', { 'data-wb-overlay': '', onClick: (e) => { if (e.target === e.currentTarget) setTaskOpen('') } },
+          h('button', { className: 'x', onClick: () => setTaskOpen('') }, '✕'),
+          h('div', { 'data-wb-sec': '', style: { width: 'min(860px, 96%)', maxHeight: '88%', overflow: 'auto', margin: 0 } },
+            h('div', { 'data-wb-row': '' },
+              h('b', {}, task.title || task.bvid || '主人请求'),
+              h('div', { 'data-wb-grow': '' }),
+              h(Chip, { ok: task.status === 'done' }, taskStatus(task))),
+            h('div', { 'data-wb-meta': '' }, [dayOf(task.at), task.bvid, task.mode, taskDelivery(task)].filter(Boolean).join(' · ')),
+            h('div', { 'data-wb-why': '' }, '主人说：' + String(task.message || '')),
+            h('pre', { 'data-wb-pre': '' }, task.summary || task.short || task.error || '（没有内容）'),
+            task.error ? h(Note, {}, '错误：' + task.error) : null)) : null,
         h(Err, {}, inbox.err),
         inbox.loading ? h('div', { 'data-wb-loading': '' }, '读取中…') : null,
         composer ? h(InteractComposer, {
@@ -710,6 +748,11 @@ window.__ModuleLoader__.load({
           selfVideosRefreshHours: draft.selfVideosRefreshHours,
           autoComment: draft.autoComment, autoReply: draft.autoReply,
           ownerUid: draft.ownerUid, ownerCall: draft.ownerCall,
+          ownerTasksEnabled: draft.ownerTasksEnabled !== false,
+          ownerTaskPollMinutes: draft.ownerTaskPollMinutes,
+          ownerTaskPerDay: draft.ownerTaskPerDay,
+          ownerTaskAllowDm: draft.ownerTaskAllowDm !== false,
+          ownerTaskMaxAgeHours: draft.ownerTaskMaxAgeHours,
           mentionName: draft.mentionName, mentions: (draft.mentions || []).filter((m) => String(m.target || '').trim()),
           replyPerDay: draft.replyPerDay,
           dmWatch: draft.dmWatch, dmWatchMinutes: draft.dmWatchMinutes,
@@ -799,6 +842,21 @@ window.__ModuleLoader__.load({
             h(Field, { label: '称呼' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '120px' }, value: draft.ownerCall || '', onChange: (e) => set('ownerCall', e.target.value), placeholder: '老弟' }),
               h(Note, {}, '评论里会自然称呼这个称呼')),
+            h('div', { 'data-wb-col': '' },
+              h('div', { 'data-wb-h': '' }, '主人 @ 任务（看视频 / 看评论 / 要总结）'),
+              h('label', { 'data-wb-toggle': '' },
+                h('input', { type: 'checkbox', checked: draft.ownerTasksEnabled !== false, onChange: (e) => set('ownerTasksEnabled', e.target.checked) }),
+                h('span', {}, '主人在评论区 @ 它就执行')),
+              h('div', { 'data-wb-row': '' },
+                h('span', {}, '每'),
+                h('input', { 'data-wb-input': '', 'data-num': '', type: 'number', min: 1, max: 60, style: { width: '70px' }, value: draft.ownerTaskPollMinutes ?? 3, onChange: (e) => set('ownerTaskPollMinutes', e.target.value) }),
+                h('span', {}, '分钟检查一次；每天最多'),
+                h('input', { 'data-wb-input': '', 'data-num': '', type: 'number', min: 1, max: 50, style: { width: '70px' }, value: draft.ownerTaskPerDay ?? 10, onChange: (e) => set('ownerTaskPerDay', e.target.value) }),
+                h('span', {}, '个')),
+              h('label', { 'data-wb-toggle': '' },
+                h('input', { type: 'checkbox', checked: draft.ownerTaskAllowDm !== false, onChange: (e) => set('ownerTaskAllowDm', e.target.checked) }),
+                h('span', {}, '长总结用私信发我（不塞评论区）')),
+              h(Note, {}, '短总结（≤45 字）默认回评论；长内容只私信。说「别发评论区」就只私信，说「回评论区」就压缩成短版。')),
             h('label', { 'data-wb-toggle': '' },
               h('input', { type: 'checkbox', checked: Boolean(draft.autoComment), onChange: (e) => set('autoComment', e.target.checked) }),
               h('span', {}, '自动评论并 @ 主人（每条采到的视频都留一条）')),
