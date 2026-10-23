@@ -861,7 +861,7 @@ window.__ModuleLoader__.load({
         setPreview(preview ? '' : `/api/bili-wb/review/media?runId=${encodeURIComponent(runId)}&kind=video`)
       }
 
-      return h('div', { 'data-wb-sec': '' },
+      return h('div', { 'data-wb-sec': '', 'data-wb-project': p.id },
         h('div', { 'data-wb-row': '' },
           h('div', { 'data-wb-projtitle': '', style: { flex: '1 1 240px' } }, plan?.title || p.title || '未命名'),
           h('span', { 'data-wb-badge': '', 'data-tone': tone }, label),
@@ -906,25 +906,93 @@ window.__ModuleLoader__.load({
           h('video', { src: preview, controls: true, autoPlay: true })) : null)
     }
 
+    /* ── 长任务卡：素材不够就自己去 B站 找，够了再写方案 ── */
+    const TASK_STATUS = {
+      queued: ['排队中', ''],
+      checking: ['检查素材库', ''],
+      collecting: ['逛 B站 中', 'warn'],
+      short: ['素材不足，继续找', 'warn'],
+      planning: ['写方案中', ''],
+      ready: ['方案已生成', 'ok'],
+      failed: ['已停止', 'warn'],
+      paused: ['已暂停', ''],
+    }
+    function TaskCard({ t, onChange }) {
+      const [busy, setBusy] = useState('')
+      const [msg, setMsg] = useState('')
+      const [label, tone] = TASK_STATUS[t.status] || ['处理中', '']
+      const last = (t.log || []).slice(-1)[0]
+      const left = t.deadline ? Math.max(0, Math.ceil((Date.parse(t.deadline) - Date.now()) / 86400_000)) : 0
+      const live = ['queued', 'checking', 'collecting', 'planning'].includes(t.status)
+      const act = async (action) => {
+        setBusy(action); setMsg('')
+        const r = await jpost('/task/' + action, { id: t.id })
+        setBusy('')
+        if (!r.ok) setMsg(errText(r) || '操作失败')
+        onChange?.()
+      }
+      const viewPlan = () => {
+        const el = document.querySelector(`[data-wb-project="${t.projectId}"]`)
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        else setMsg('方案就在下面，往下翻一下')
+      }
+      const time = (iso) => {
+        try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) } catch { return '' }
+      }
+      return h('div', { 'data-wb-sec': '' },
+        h('div', { 'data-wb-row': '' },
+          h(Chip, {}, '任务'),
+          h(Chip, { ok: tone === 'ok', warn: tone === 'warn' }, label),
+          h('b', {}, t.topic || t.brief || '未命名任务'),
+          h('div', { 'data-wb-grow': '' }),
+          t.status === 'ready' && t.projectId ? h(Btn, { sm: true, primary: true, onClick: viewPlan }, '查看方案') : null,
+          live ? h(Btn, { sm: true, disabled: busy === 'pause', onClick: () => act('pause') }, '暂停') : null,
+          t.status === 'paused' ? h(Btn, { sm: true, disabled: busy === 'resume', onClick: () => act('resume') }, '继续') : null,
+          (t.status === 'short' || t.status === 'failed' || t.status === 'queued') ? h(Btn, {
+            sm: true, primary: t.status !== 'queued', disabled: Boolean(busy), onClick: () => act('retry'),
+          }, busy === 'retry' ? '启动中…' : '现在再找一轮') : null,
+          h(Btn, { sm: true, disabled: Boolean(busy), onClick: () => act('delete') }, '删除')),
+        h('div', { 'data-wb-meta': '' }, String(t.brief || '')),
+        h('div', { 'data-wb-meta': '' },
+          [
+            `素材 ${t.matched ?? 0}/${t.needed ?? 3}`,
+            t.attempts ? `第 ${t.attempts} 轮` : '',
+            t.deadline ? `剩 ${left} 天` : '',
+            t.planTitle ? `方案：${t.planTitle}` : '',
+            t.lastError ? t.lastError : '',
+          ].filter(Boolean).join(' · ')),
+        h('div', { 'data-wb-meta': '' },
+          last ? `最近：${String(last.text || '')}${last.at ? `（${time(last.at)}）` : ''}` : '还没开始'),
+        t.status === 'collecting' ? h(Note, {}, '正在 B站 搜索并采集，几分钟后回来看；找不到就过几小时再找。') : null,
+        t.status === 'planning' ? h(Note, {}, '素材够了，正在写分镜方案，一般 20–60 秒。') : null,
+        msg ? h(Note, {}, msg) : null)
+    }
+
     function TabCreate({ basket, setBasket }) {
       const [brief, setBrief] = useState('')
       const [busy, setBusy] = useState('')
       const [log, setLog] = useState('')
       const list = useApi('/create/plans')
+      const taskList = useApi('/task/list')
       const projects = list.data?.projects || []
+      const taskRows = taskList.data?.tasks || []
+      const activeTasks = taskRows.filter((t) => !['ready', 'failed'].includes(t.status)).length
       const anyRunning = projects.some((p) => p.job?.stage === 'running')
       usePoll(list.reload, 4000, true)
+      usePoll(taskList.reload, 4000, true)
 
       const go = async () => {
         if (!brief.trim()) return
-        setBusy('go'); setLog('① 检索素材库 → ② 挑料 → ③ 写分镜（一般 20–60 秒）')
-        const r = await jpost('/create/plan', { brief })
+        setBusy('go'); setLog('已创建任务：先查素材库，不够就自己去 B站 找（进度看下面）')
+        const r = await jpost('/task/create', { brief })
         setBusy('')
-        if (r.ok) { setLog(`已生成 v1：${r.plan.title}`); setBrief(''); list.reload() }
-        else setLog('失败：' + (errText(r) || '') + (r.log ? '\n' + r.log : ''))
+        if (r.ok) {
+          setLog(`任务已创建${r.task?.topic ? `：${r.task.topic}` : ''}。素材不够会按关键词去「刷B站」找，够了自动写方案。`)
+          setBrief(''); taskList.reload(); list.reload()
+        } else setLog('失败：' + (errText(r) || ''))
       }
       return h('div', { 'data-wb-page': '' },
-        h(PageHead, { title: '创作 / 出片', sub: '一句需求 → 出方案 → 继续改（每改一次一个版本）；深聊就点「在对话里接着聊」' }),
+        h(PageHead, { title: '创作 / 出片', sub: '一句需求 → 长任务：先查库，素材不够会自己去刷B站；够料再出方案' }),
         h(Sec, {},
           h('div', { 'data-wb-projtitle': '' }, '想做什么样的片子？'),
           h('input', {
@@ -933,10 +1001,15 @@ window.__ModuleLoader__.load({
             onKeyDown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) go() },
           }),
           h('div', { 'data-wb-row': '' },
-            h(Btn, { primary: true, disabled: busy === 'go' || !brief.trim(), onClick: go }, busy === 'go' ? '正在从素材库找料…' : '让 AI 开始'),
-            h('span', { 'data-wb-note': '' }, '它会自己检索素材库、挑料、写分镜（Ctrl+Enter 发送）'),
+            h(Btn, { primary: true, disabled: busy === 'go' || !brief.trim(), onClick: go }, busy === 'go' ? '创建任务中…' : '让 AI 开始'),
+            h('span', { 'data-wb-note': '' }, '库里有料就直接写方案；不够就自己去刷B站，可以等几天（Ctrl+Enter 发送）'),
             basket.length ? h('span', { 'data-wb-note': '' }, `创作篮里还有 ${basket.length} 条，可以在下面手动指认`) : null),
           log ? h('pre', { 'data-wb-pre': '' }, log) : null),
+        taskRows.length ? h(Sec, { title: `任务${activeTasks ? `（${activeTasks} 个进行中）` : ''}` },
+          h(Note, {}, '素材不够时按关键词自己去「刷B站」找；够料后自动写方案。不会自动渲染、不会自动投稿。'),
+          h('div', { 'data-wb-col': '' }, ...taskRows.map((t) => h(TaskCard, {
+            key: t.id, t, onChange: () => { taskList.reload(); list.reload() },
+          })))) : null,
         h('div', { 'data-wb-row': '' },
           h(Note, {}, `共 ${projects.length} 个方案${anyRunning ? ' · 有项目在渲染' : ''}`),
           h('div', { 'data-wb-grow': '' }),

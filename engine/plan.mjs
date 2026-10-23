@@ -172,8 +172,11 @@ async function main() {
     prev = JSON.parse(readFileSync(reviseFile, 'utf8'))
   }
 
-  const rows = list({ limit: 2000 }).filter((r) => (r.subtitle?.chars || 0) > 0 || (r.quotes || []).length)
-  if (!rows.length) { console.error('素材库里还没有可用素材（需要字幕或可用片段）'); process.exit(3) }
+  const rows0 = list({ limit: 2000 }).filter((r) => (r.subtitle?.chars || 0) > 0 || (r.quotes || []).length)
+  // 长任务会用它圈定“只准用这些相关素材”
+  const onlyBvs = new Set(String(arg('bvs', '')).split(',').map((s) => s.trim()).filter(Boolean))
+  const rows = onlyBvs.size ? rows0.filter((r) => onlyBvs.has(r.bvid)) : rows0
+  if (!rows.length) { console.error(onlyBvs.size ? '指定的素材里没有可用素材（需要字幕或片段）' : '素材库里还没有可用素材（需要字幕或可用片段）'); process.exit(3) }
 
   console.log(reviseFile ? `改一版：${brief}` : `新方案：${brief}`)
   console.log(`素材候选 ${rows.length} 条（带字幕/片段），喂给模型前 ${Math.min(rows.length, limit)} 条`)
