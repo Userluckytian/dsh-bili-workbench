@@ -26,6 +26,7 @@ import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
 import * as tasks from './engine/taskstore.mjs'
 import { answerOwnerCommand, auditMessage, refusalText, mentionTargets, callNames } from './engine/owner.mjs'
+import * as canon from './engine/canon.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -61,6 +62,10 @@ const DEFAULTS = {
   frameCount: 10,                // 每条最多抽 10 帧（AI 挑）
   /* 偏好 */
   personaPrompt: DEFAULT_PERSONA,
+  /* 自己的视频：从 B站 合集缓存「日常短片」，注入评论/回复/方案 */
+  selfVideosEnabled: true,
+  selfVideosUrl: '',             // 合集链接，如 https://space.bilibili.com/<mid>/lists/<seasonId>
+  selfVideosRefreshHours: 24,
   reportLevel: 'full',           // full | brief | off
   favFolderId: '',               // 判定为「值得看」时自动收藏到哪个收藏夹（留空不收藏）
   /* 互动：默认关；打开后按配置自动执行（本机实例已单独打开） */
@@ -174,6 +179,9 @@ function normalizeCfg(c) {
   out.llmKey = String(out.llmKey || '').slice(0, 300)
   out.scheduleRanges = parseRanges(out.scheduleRanges).length ? String(out.scheduleRanges) : '00:00-24:00'
   out.personaPrompt = String(out.personaPrompt ?? DEFAULT_PERSONA).slice(0, 1200)
+  out.selfVideosEnabled = out.selfVideosEnabled !== false
+  out.selfVideosUrl = String(out.selfVideosUrl || '').trim().slice(0, 300)
+  out.selfVideosRefreshHours = clampNum(out.selfVideosRefreshHours, 1, 720, 24)
   out.reportLevel = ['full', 'brief', 'off'].includes(out.reportLevel) ? out.reportLevel : 'full'
   out.favFolderId = String(out.favFolderId || '').slice(0, 60)
   out.autoComment = out.autoComment !== false
@@ -212,7 +220,7 @@ const saveCfg = (patch) => {
 const loadSched = () => readJson(scheduleFile(), { lastRunAt: '', lastResult: '' })
 
 /** 跑引擎脚本（子进程），返回输出尾巴 */
-function runEngine(script, args = [], timeoutMs = 20 * 60_000) {
+function runEngine(script, args = [], timeoutMs = 20 * 60_000, extraEnv = null) {
   return new Promise((resolvePromise) => {
     const cfg = loadCfg()
     const env = {
@@ -221,7 +229,9 @@ function runEngine(script, args = [], timeoutMs = 20 * 60_000) {
       PYTHONIOENCODING: 'utf-8',
       BILI_OP_MODELS: cfg.modelChain.join(','),
     }
+    if (extraEnv) Object.assign(env, extraEnv)
     if (cfg.personaPrompt) env.BILI_OP_PERSONA = cfg.personaPrompt
+    if (!env.BILI_OP_SELF_VIDEOS) env.BILI_OP_SELF_VIDEOS = canon.renderBlock()
     if (cfg.ownerUid) env.BILI_OWNER_UID = cfg.ownerUid
     if (cfg.ownerCall) env.BILI_OWNER_CALL = cfg.ownerCall
     if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
@@ -781,7 +791,7 @@ export function apply(ctx) {
       const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
       const args = [brief, '--out', tmp]
       if (body.limit) args.push('--limit', String(Math.min(Number(body.limit) || 40, 120)))
-      const r = await runEngine('plan.mjs', args, 10 * 60_000)
+      const r = await runEngine('plan.mjs', args, 10 * 60_000, { BILI_OP_SELF_VIDEOS: canon.renderBlock(brief) })
       let plan = null
       try { plan = JSON.parse(readFileSync(tmp, 'utf8')) } catch { plan = null }
       try { unlinkSync(tmp) } catch { /* 已删 */ }
@@ -811,7 +821,9 @@ export function apply(ctx) {
         writeJson(prevFile, prevPlan)
       }
       const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
-      const r = await runEngine('plan.mjs', ['--revise', prevFile, '--instruction', instruction, '--out', tmp], 10 * 60_000)
+      const r = await runEngine('plan.mjs', ['--revise', prevFile, '--instruction', instruction, '--out', tmp], 10 * 60_000, {
+        BILI_OP_SELF_VIDEOS: canon.renderBlock(instruction),
+      })
       let plan = null
       try { plan = JSON.parse(readFileSync(tmp, 'utf8')) } catch { plan = null }
       try { unlinkSync(tmp) } catch { /* 已删 */ }
@@ -1081,6 +1093,19 @@ export function apply(ctx) {
       })
     }
 
+    /* ══════════ 自己的视频（B站合集） ══════════ */
+    if (req.method === 'GET' && path === '/canon/state') {
+      return sendJson(res, 200, { ok: true, ...canon.status() })
+    }
+    if (req.method === 'POST' && path === '/canon/refresh') {
+      const body = await readBody(req)
+      const url = String(body.url || '').trim()
+      if (url) saveCfg({ selfVideosUrl: url })
+      const r = canon.refresh(loadCfg().selfVideosUrl, { force: true })
+      if (!r.ok) return sendJson(res, 200, r)
+      return sendJson(res, 200, { ok: true, refreshed: true, status: canon.status() })
+    }
+
     /* ══════════ 互动：预览 / dry-run / 受控发送 ══════════ */
     if (req.method === 'GET' && path === '/interact/state') {
       const cfg = loadCfg()
@@ -1116,10 +1141,14 @@ export function apply(ctx) {
       }
       if (!text) {
         const ctx = kind === 'comment'
-          ? { title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall, calls: callNames(cfg) }
+          ? {
+            title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall, calls: callNames(cfg),
+            selfVideos: canon.renderBlock(body.title || ''),
+          }
           : {
             message: body.message || '', replyingTo: body.replyingTo || '', video: body.video || '',
             owner: body.owner === true, ownerCall: cfg.ownerCall,
+            selfVideos: canon.renderBlock(body.message || body.video || ''),
           }
         const r = await runEngine('compose.mjs', ['--kind', kind, '--context', JSON.stringify(ctx)], 120_000)
         logText = r.text.slice(-1500)
@@ -1198,6 +1227,7 @@ export function apply(ctx) {
       const copyKeys = [
         'enabled', 'keywords', 'llmKey', 'scheduleRanges', 'perDay',
         'personaPrompt', 'reportLevel', 'favFolderId',
+        'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',
         'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
         'voice', 'modelChain', 'concurrency',
@@ -1254,6 +1284,14 @@ export function apply(ctx) {
   } catch (e) {
     try { ctx.logger?.warn?.('[bili-workbench] 路由没挂上：' + String(e?.message ?? e)) } catch { /* ignore */ }
   }
+
+  /* ── 自己的视频：启动时补一次缓存，之后每 6 小时看一次是否过期 ── */
+  canon.ensureFresh()
+    .then((st) => { if (st?.epCount) log(`自己的视频：${st.title} · ${st.epCount} 集`) })
+    .catch(() => { /* 离线时用旧缓存 */ })
+  try {
+    setInterval(() => { canon.ensureFresh().catch(() => { /* 忽略 */ }) }, 6 * 3600_000)
+  } catch { /* ignore */ }
 
   /* ── 采集定时器：按时段 + 每日上限平均分配，每分钟看一次 ── */
   try {

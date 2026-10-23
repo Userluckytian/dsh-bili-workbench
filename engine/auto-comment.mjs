@@ -14,6 +14,7 @@ import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
 import { ownerInfo, mentionTargets, callNames } from './owner.mjs'
+import * as canon from './canon.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -78,6 +79,7 @@ async function main() {
       memes: (rec.memes || []).slice(0, 3),
       hotComments: (rec.hotComments || []).slice(0, 3).map((x) => x.text),
       ownerCall: owner.call,
+      selfVideos: canon.renderBlock(rec.title || '', { picks: 2 }),
       calls,
     }
     let text = ''

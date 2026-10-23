@@ -16,6 +16,7 @@ import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
 import { ownerInfo, answerOwnerCommand, auditMessage, refusalText, todayStats } from './owner.mjs'
+import * as canon from './canon.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -100,7 +101,10 @@ async function main() {
         try {
           const s = todayStats()
           const stats = `今天已逛 ${s.todayVideos} 条，目标 ${s.target} 条；评论 ${s.comments} 条，回复 ${s.replies} 条；时段 ${s.ranges}，每天上限 ${s.perDay} 条`
-          const c = await composeText('owner', { message: m.content || '', stats, ownerCall: owner.call }, persona)
+          const c = await composeText('owner', {
+            message: m.content || '', stats, ownerCall: owner.call,
+            selfVideos: canon.renderBlock(m.content || '', { picks: 2 }),
+          }, persona)
           text = ensureCall(c.text, owner.call)
         } catch (e) {
           log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
@@ -114,6 +118,7 @@ async function main() {
           message: m.content || '',
           replyingTo: m.replying_to || '',
           video: m.on?.title || '',
+          selfVideos: canon.renderBlock(m.content || m.on?.title || '', { picks: 2 }),
         }, persona)
         text = c.text
       } catch (e) {

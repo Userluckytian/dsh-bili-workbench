@@ -671,6 +671,7 @@ window.__ModuleLoader__.load({
 
     function SubSettings({ onRunRound, onSaved }) {
       const cfgRes = useApi('/config')
+      const canonRes = useApi('/canon/state')
       const cfg = cfgRes.data?.config
       const sched = cfgRes.data?.schedule || {}
       const [draft, setDraft] = useState(null)
@@ -704,6 +705,9 @@ window.__ModuleLoader__.load({
           keywords: String(draft.keywordsText || '').split('\n').map((s) => s.trim()).filter(Boolean),
           llmKey: draft.llmKey,
           personaPrompt: draft.personaPrompt, reportLevel: draft.reportLevel, favFolderId: draft.favFolderId,
+          selfVideosEnabled: draft.selfVideosEnabled !== false,
+          selfVideosUrl: draft.selfVideosUrl || '',
+          selfVideosRefreshHours: draft.selfVideosRefreshHours,
           autoComment: draft.autoComment, autoReply: draft.autoReply,
           ownerUid: draft.ownerUid, ownerCall: draft.ownerCall,
           mentionName: draft.mentionName, mentions: (draft.mentions || []).filter((m) => String(m.target || '').trim()),
@@ -723,6 +727,16 @@ window.__ModuleLoader__.load({
         const r = await jpost('/run-round')
         setBusy('')
         setMsg(r.ok ? `跑完了（${r.seconds}s）· 库里 ${r.stats?.videos ?? '?'} 条` : '跑失败：' + (errText(r) || ''))
+      }
+      const refreshCanon = async () => {
+        setBusy('canon'); setMsg('拉取合集…')
+        const r = await jpost('/canon/refresh', { url: draft.selfVideosUrl || '' })
+        setBusy('')
+        if (r.ok) {
+          setMsg(`已更新《${r.status?.title || ''}》· ${r.status?.epCount || 0} 集`)
+          canonRes.reload()
+          cfgRes.reload()
+        } else setMsg('拉取失败：' + (errText(r) || r.error || ''))
       }
 
       return h('div', { 'data-wb-col': '' },
@@ -753,7 +767,23 @@ window.__ModuleLoader__.load({
               h('textarea', { 'data-wb-input': '', 'data-area': '', rows: 4, value: draft.keywordsText, onChange: (e) => set('keywordsText', e.target.value) })),
             h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, '人设（判定 / 方案 / 评论都用它）'),
-              h('textarea', { 'data-wb-input': '', 'data-area': '', rows: 3, value: draft.personaPrompt || '', onChange: (e) => set('personaPrompt', e.target.value), placeholder: '例：叫我老弟，说话像贴吧老哥，犀利不客气，控制在 40 字内' })),
+              h('textarea', { 'data-wb-input': '', 'data-area': '', rows: 6, value: draft.personaPrompt || '', onChange: (e) => set('personaPrompt', e.target.value), placeholder: '例：叫我老弟，说话像贴吧老哥，犀利不客气，控制在 40 字内' })),
+            h('div', { 'data-wb-col': '' },
+              h('div', { 'data-wb-h': '' }, '自己的视频（B站合集）'),
+              h('label', { 'data-wb-toggle': '' },
+                h('input', { type: 'checkbox', checked: draft.selfVideosEnabled !== false, onChange: (e) => set('selfVideosEnabled', e.target.checked) }),
+                h('span', {}, '把合集里的日常短片当身份背景，评论 / 回复 / 方案可以自然引用')),
+              h('div', { 'data-wb-row': '' },
+                h('input', {
+                  'data-wb-input': '', style: { maxWidth: '460px' }, value: draft.selfVideosUrl || '',
+                  onChange: (e) => set('selfVideosUrl', e.target.value),
+                  placeholder: 'https://space.bilibili.com/<UID>/lists/<合集ID>',
+                }),
+                h(Btn, { sm: true, disabled: busy === 'canon', onClick: refreshCanon }, busy === 'canon' ? '拉取中…' : '更新合集')),
+              h(Note, {}, canonRes.data?.ok
+                ? `已缓存《${canonRes.data.title}》${canonRes.data.epCount} 集 · ${canonRes.data.fetchedAt ? new Date(canonRes.data.fetchedAt).toLocaleString('zh-CN') : ''}`
+                : '还没缓存：填合集链接后点「更新合集」'),
+              h(Note, {}, '只取最近和相关几条放进提示词，不写进记忆；之后每 6 小时自动检查是否过期。')),
             h(Field, { label: '日报粒度' },
               h('select', { 'data-wb-input': '', style: { width: '120px' }, value: draft.reportLevel, onChange: (e) => set('reportLevel', e.target.value) },
                 h('option', { value: 'full' }, '完整'),

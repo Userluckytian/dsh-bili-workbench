@@ -24,6 +24,7 @@ import { list, STORE } from './store.mjs'
 import { createProject } from './planstore.mjs'
 import * as tasks from './taskstore.mjs'
 import { loadLLM } from './llmpath.mjs'
+import * as canon from './canon.mjs'
 
 const { chatJSON } = await loadLLM()
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -181,6 +182,7 @@ function writePlan(task, found) {
   const tmp = join(STORE, 'plans', `.tmp-task-${task.id}-${Date.now()}.json`)
   const bvs = found.slice(0, 40).map((x) => x.rec.bvid).join(',')
   log(`素材够了（${found.length} 条），开始写方案…`)
+  process.env.BILI_OP_SELF_VIDEOS = canon.renderBlock(task.brief || task.topic || '', { picks: 3 })
   const r = runNode('plan.mjs', [task.brief, '--out', tmp, '--limit', '40', '--bvs', bvs], 10 * 60_000)
   const plan = readJson(tmp, null)
   try { unlinkSync(tmp) } catch { /* 已删 */ }

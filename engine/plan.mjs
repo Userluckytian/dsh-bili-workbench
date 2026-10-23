@@ -39,6 +39,12 @@ function personaLine() {
   return p ? `\n\n【人设 / 口径】${p}\n写标题、点评和旁白都按这个人设说话。` : ''
 }
 
+/** 自己的视频（合集缓存）：可以自然引用，但不影响分镜结构 */
+function selfVideosLine() {
+  const b = String(process.env.BILI_OP_SELF_VIDEOS || '').trim()
+  return b ? `\n\n${b}\n写标题、点评和旁白时可以参考自己拍过的东西，但不要硬提。` : ''
+}
+
 function buildPrompt(brief, rows, limit, revise = null) {
   const lines = rows.slice(0, limit).map((r, i) => {
     const q = (r.quotes || []).slice(0, 3).map((x) => `${Math.round(x.t)}s「${x.text.slice(0, 18)}」`).join(' / ')
@@ -182,7 +188,7 @@ async function main() {
   console.log(`素材候选 ${rows.length} 条（带字幕/片段），喂给模型前 ${Math.min(rows.length, limit)} 条`)
   const t0 = Date.now()
   const { json, model } = await chatJSON(
-    [{ role: 'system', content: SYSTEM + personaLine() }, { role: 'user', content: buildPrompt(brief, rows, limit, prev) }],
+    [{ role: 'system', content: SYSTEM + personaLine() + selfVideosLine() }, { role: 'user', content: buildPrompt(brief, rows, limit, prev) }],
     { maxTokens: 3500, temperature: 0.55 },
   )
   const plan = normalize(json, rows)
