@@ -24,7 +24,7 @@ import {
 import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
-import { answerOwnerCommand } from './engine/owner.mjs'
+import { answerOwnerCommand, auditMessage } from './engine/owner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -932,6 +932,19 @@ export function apply(ctx) {
       let text = String(body.text || '').trim()
       let model = ''
       let logText = ''
+      if (kind === 'reply') {
+        const isOwner = body.owner === true
+        const audit = auditMessage(body.message || '', { isOwner })
+        if (!audit.allow) {
+          if (isOwner && audit.reason === 'owner-dangerous') {
+            return sendJson(res, 200, {
+              ok: true, kind, model: 'audit-refused', cap: null,
+              text: `${cfg.ownerCall || '老弟'}，这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。`,
+            })
+          }
+          return sendJson(res, 200, { ok: false, blocked: true, reason: audit.reason, error: '这条消息涉及统计 / 配置 / 权限，已忽略' })
+        }
+      }
       if (!text && body.owner && kind === 'reply') {
         const direct = answerOwnerCommand(body.message || '', cfg)
         if (direct) return sendJson(res, 200, { ok: true, text: direct, model: 'owner-command', cap: null, kind })
