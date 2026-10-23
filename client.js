@@ -1343,7 +1343,45 @@ window.__ModuleLoader__.load({
     function Shell() {
       const [tab, setTab] = useState('store')
       const [collapsed, setCollapsed] = useState(false)
-      return h('div', { 'data-wb-root': '', 'data-collapsed': collapsed ? '' : undefined },
+      const rootRef = useRef(null)
+      // 让工作台高度跟着宿主“可用区 - 输入区”走，避免外层再多一条滚动条
+      React.useLayoutEffect(() => {
+        const root = rootRef.current
+        if (!root) return
+        const findScroll = () => {
+          let el = root.parentElement
+          while (el) {
+            const s = getComputedStyle(el)
+            if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.clientHeight > 0) return el
+            el = el.parentElement
+          }
+          return null
+        }
+        const seatOf = (scroll) => scroll?.querySelector('[class*="composerSeat"]') || null
+        let seat = null
+        const fit = () => {
+          const scroll = findScroll()
+          if (!scroll) return
+          seat = seatOf(scroll)
+          const seatH = seat ? seat.offsetHeight : 0
+          const avail = Math.max(320, scroll.clientHeight - seatH)
+          root.style.height = avail + 'px'
+          root.style.maxHeight = avail + 'px'
+          root.style.minHeight = '0px'
+        }
+        fit()
+        const ro = new ResizeObserver(() => fit())
+        ro.observe(document.documentElement)
+        const scroll = findScroll()
+        if (scroll) ro.observe(scroll)
+        if (seat) ro.observe(seat)
+        window.addEventListener('resize', fit)
+        const t = setTimeout(fit, 500)
+        // 宿主切换会话 / 输入框变高时，再量一次
+        const iv = setInterval(fit, 1500)
+        return () => { clearTimeout(t); clearInterval(iv); ro.disconnect(); window.removeEventListener('resize', fit) }
+      }, [])
+      return h('div', { 'data-wb-root': '', 'data-collapsed': collapsed ? '' : undefined, ref: rootRef },
         h('aside', { 'data-wb-rail': '' },
           h('div', { 'data-wb-brand': '' }, 'B站工作台', h('small', {}, '素材 → 出片 → 发布')),
           h('nav', { style: { display: 'flex', flexDirection: 'column' } },
