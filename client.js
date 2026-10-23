@@ -856,7 +856,7 @@ window.__ModuleLoader__.load({
               h('label', { 'data-wb-toggle': '' },
                 h('input', { type: 'checkbox', checked: draft.ownerTaskAllowDm !== false, onChange: (e) => set('ownerTaskAllowDm', e.target.checked) }),
                 h('span', {}, '长总结用私信发我（不塞评论区）')),
-              h(Note, {}, '短总结（≤45 字）默认回评论；长内容只私信。说「别发评论区」就只私信，说「回评论区」就压缩成短版。')),
+              h(Note, {}, '任务默认只私信 / 工作台，不往评论区塞；说「回评论区」才回 ≤45 字短版。私信需要先在「我的」里扫码登录 bili-cli；没登录时长内容只留在工作台。')),
             h('label', { 'data-wb-toggle': '' },
               h('input', { type: 'checkbox', checked: Boolean(draft.autoComment), onChange: (e) => set('autoComment', e.target.checked) }),
               h('span', {}, '自动评论并 @ 主人（每条采到的视频都留一条）')),

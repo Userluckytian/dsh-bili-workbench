@@ -158,15 +158,25 @@ function dmChunks(text, max = 450) {
   return parts.slice(0, 4)
 }
 
-function sendDm(uid, text, dryRun) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function sendDm(uid, text, dryRun) {
   const chunks = dmChunks(text)
   let sent = 0
   for (let i = 0; i < chunks.length; i++) {
     const head = chunks.length > 1 ? `(${i + 1}/${chunks.length}) ` : ''
     const body = head + chunks[i]
     if (dryRun) { log(`  [dry-run] 私信 ${uid}：${body.slice(0, 80)}…`); sent++; continue }
-    const r = runBili(['dm', 'send', String(uid), body, '--allow-new'], { timeoutMs: 60_000 })
-    if (!r.ok) return { ok: false, sent, error: r.error?.message || r.error?.code || '私信失败' }
+    // 私信有 10 秒本地间隔；--wait 让 CLI 自己等，拆条之间再补一刀
+    if (i > 0) await sleep(11_000)
+    const r = runBili(['--wait', 'dm', 'send', String(uid), body, '--allow-new'], { timeoutMs: 120_000 })
+    if (!r.ok) {
+      const msg = r.error?.message || r.error?.code || '私信失败'
+      const hint = /-101|未登录/.test(String(msg))
+        ? '（私信需要重新扫码登录 bili-cli；长内容先留在工作台「消息 → 主人请求」）'
+        : ''
+      return { ok: false, sent, error: msg + hint }
+    }
     sent++
   }
   return { ok: true, sent }
@@ -174,19 +184,19 @@ function sendDm(uid, text, dryRun) {
 
 function replyComment({ bv, rpid, root, text, dryRun }) {
   if (!bv || !rpid) return { ok: false, error: '没有可回复的评论' }
-  const args = ['comment', 'reply', bv, String(rpid), text]
+  const args = ['--wait', 'comment', 'reply', bv, String(rpid), text]
   if (root) args.push('--root', String(root))
   if (dryRun) { log(`  [dry-run] 回复 ${bv}/${rpid}：${text}`); return { ok: true } }
-  const r = runBili(args, { timeoutMs: 60_000 })
+  const r = runBili(args, { timeoutMs: 120_000 })
   return r.ok ? { ok: true } : { ok: false, error: r.error?.message || r.error?.code || '回复失败' }
 }
 
 function postComment({ bv, text, dryRun, atUid }) {
   if (!bv) return { ok: false, error: '没有视频' }
-  const args = ['comment', 'post', bv, text]
+  const args = ['--wait', 'comment', 'post', bv, text]
   if (atUid) args.push('--at', String(atUid))
   if (dryRun) { log(`  [dry-run] 评论 ${bv}：${text}`); return { ok: true } }
-  const r = runBili(args, { timeoutMs: 60_000 })
+  const r = runBili(args, { timeoutMs: 120_000 })
   return r.ok ? { ok: true } : { ok: false, error: r.error?.message || r.error?.code || '评论失败' }
 }
 
@@ -243,10 +253,14 @@ async function handleOne({ message, bv, rpid, root, mentionId, dryRun, source = 
       const canComment = !intent.noReply && Boolean(bv && rpid)
       const out = canComment
         ? replyComment({ bv, rpid, root, text: c.text, dryRun })
-        : sendDm(ownerUid, c.text, dryRun)
+        : await sendDm(ownerUid, c.text, dryRun)
       if (out.ok) rec.delivery.push(canComment ? 'comment' : 'dm')
-      else rec.error = out.error || ''
-      rec.status = out.ok ? 'done' : 'failed'
+      else {
+        if (out.sent) rec.delivery.push('dm')
+        rec.error = out.error || ''
+      }
+      rec.status = out.ok ? 'done' : 'stored'
+      if (!rec.delivery.length) rec.delivery.push('stored')
     } catch (e) {
       rec.status = 'failed'
       rec.error = String(e?.message ?? e).split('\n')[0]
@@ -261,10 +275,14 @@ async function handleOne({ message, bv, rpid, root, mentionId, dryRun, source = 
     rec.short = ask
     rec.summary = ask
     const dm = intent.noReply || !rpid
-    const out = dm ? sendDm(ownerUid, ask, dryRun) : replyComment({ bv, rpid, root, text: ask, dryRun })
+    const out = dm ? await sendDm(ownerUid, ask, dryRun) : replyComment({ bv, rpid, root, text: ask, dryRun })
     if (out.ok) rec.delivery.push(dm ? 'dm' : 'comment')
-    else rec.error = out.error || ''
-    rec.status = out.ok ? 'done' : 'failed'
+    else {
+      if (out.sent) rec.delivery.push('dm')
+      rec.error = out.error || ''
+    }
+    rec.status = out.ok ? 'done' : 'stored'
+    if (!rec.delivery.length) rec.delivery.push('stored')
     saveTask(rec)
     return rec
   }
@@ -290,19 +308,14 @@ async function handleOne({ message, bv, rpid, root, mentionId, dryRun, source = 
   }
 
   const long = `${rec.title ? `《${rec.title}》\n` : ''}${rec.summary}`
-  const allowDm = conf.ownerTaskAllowDm !== false && !intent.noDm && ownerUid
-  const shortFits = rec.short && rec.short.length <= 45
+  const allowDm = conf.ownerTaskAllowDm !== false && !intent.noDm && Boolean(ownerUid)
 
-  let wantComment
-  if (intent.wantComment) wantComment = true
-  else if (intent.noReply || intent.wantDm) wantComment = false
-  else wantComment = shortFits
-
+  // 任务默认只走私信/工作台，不往评论区塞；只有主人明确说「回评论区」才回短版。
+  const wantComment = Boolean(intent.wantComment)
   let wantDm
   if (intent.noDm) wantDm = false
-  else if (intent.wantDm || intent.noReply) wantDm = true
-  else if (intent.wantComment) wantDm = false
-  else wantDm = !wantComment
+  else if (intent.wantComment) wantDm = Boolean(intent.wantDm)
+  else wantDm = allowDm
 
   if (wantComment) {
     const text = rec.short + (wantDm ? '（详细发你私信了）' : '')
@@ -313,13 +326,15 @@ async function handleOne({ message, bv, rpid, root, mentionId, dryRun, source = 
     else { rec.error = out.error || '评论失败'; wantDm = allowDm }
   }
   if (wantDm && allowDm) {
-    const out = sendDm(ownerUid, long, dryRun)
-    if (out.ok) rec.delivery.push('dm')
-    else rec.error = [rec.error, out.error].filter(Boolean).join('；')
+    const out = await sendDm(ownerUid, long, dryRun)
+    if (out.sent) rec.delivery.push('dm')
+    if (!out.ok) rec.error = [rec.error, out.error].filter(Boolean).join('；')
   }
 
-  rec.status = rec.delivery.length ? 'done' : (rec.error ? 'failed' : 'stored')
-  if (!rec.delivery.length && !rec.error) rec.delivery.push('stored')
+  const delivered = rec.delivery.some((x) => x === 'comment' || x === 'dm')
+  rec.status = delivered ? 'done' : 'stored'
+  if (!rec.delivery.length) rec.delivery.push('stored')
+  if (!delivered && !rec.error) rec.error = '私信没发出去，全文留在工作台「消息 → 主人请求」'
   saveTask(rec)
   return rec
 }
