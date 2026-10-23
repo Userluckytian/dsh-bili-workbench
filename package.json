@@ -1,7 +1,16 @@
 {
   "name": "dsh-bili-workbench",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DSH 插件：刷 B站 + 素材库 + AI 出片 + 审核发布 + 自动互动",
+  "author": "Userluckytian",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Userluckytian/dsh-bili-workbench.git"
+  },
+  "homepage": "https://github.com/Userluckytian/dsh-bili-workbench#readme",
+  "bugs": {
+    "url": "https://github.com/Userluckytian/dsh-bili-workbench/issues"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",

@@ -13,19 +13,57 @@
  *   <STORE>/covers/<BV>.jpg      封面
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 
-// 保持原机器的数据目录不变；换机器时默认落到 ~/.dsh-bili-workbench/store
+// 素材库位置：默认 ~/.dsh-bili-workbench/store；可以在「我的」页面改。
+// 优先级：location.json（用户选过）> BILI_STORE > 旧机器默认目录 > 新默认目录。
+const HOME_DIR = join(homedir(), '.dsh-bili-workbench')
+const LOCATION_FILE = join(HOME_DIR, 'location.json')
 const LEGACY_STORE = 'D:\\AI_projects\\bibilili\\bili-store'
-export const STORE = process.env.BILI_STORE
-  || (existsSync(LEGACY_STORE) ? LEGACY_STORE : join(homedir(), '.dsh-bili-workbench', 'store'))
+const DEFAULT_STORE = join(HOME_DIR, 'store')
+const expandHome = (p) => String(p || '').replace(/^~(?=$|[\\/])/, homedir())
 
-const DIRS = {
-  videos: join(STORE, 'videos'),
-  subs: join(STORE, 'subs'),
-  frames: join(STORE, 'frames'),
-  covers: join(STORE, 'covers'),
+function readLocation() {
+  try {
+    const j = JSON.parse(readFileSync(LOCATION_FILE, 'utf8'))
+    return expandHome(j?.storePath || '')
+  } catch { return '' }
+}
+
+export function resolveStoreRoot() {
+  const saved = readLocation()
+  if (saved && isAbsolute(saved)) return saved
+  const env = expandHome(process.env.BILI_STORE || '')
+  if (env) return resolve(env)
+  if (existsSync(LEGACY_STORE)) return LEGACY_STORE
+  return DEFAULT_STORE
+}
+
+export const defaultStorePath = () => DEFAULT_STORE
+export const locationFile = () => LOCATION_FILE
+
+export let STORE = resolveStoreRoot()
+
+const dirsFor = (root) => ({
+  videos: join(root, 'videos'),
+  subs: join(root, 'subs'),
+  frames: join(root, 'frames'),
+  covers: join(root, 'covers'),
+})
+let DIRS = dirsFor(STORE)
+
+/** 切换素材库位置；写 location.json，之后重启也以它为优先 */
+export function setStoreRoot(p) {
+  const abs = resolve(expandHome(p))
+  if (!isAbsolute(abs)) throw new Error('素材库位置必须是绝对路径')
+  mkdirSync(abs, { recursive: true })
+  DIRS = dirsFor(abs)
+  STORE = abs
+  mkdirSync(HOME_DIR, { recursive: true })
+  writeFileSync(LOCATION_FILE, JSON.stringify({ storePath: abs }, null, 2), 'utf8')
+  ensureStore()
+  return STORE
 }
 
 export function ensureStore() {

@@ -1079,6 +1079,20 @@ window.__ModuleLoader__.load({
       const d = stats.data?.data
       const n = (o, k) => (o && Number.isFinite(Number(o[k])) ? Number(o[k]) : 0)
       const store = cfgRes.data?.store || {}
+      const [storePath, setStorePath] = useState('')
+      useEffect(() => { if (store.path) setStorePath(store.path) }, [store.path])
+      const relocate = async () => {
+        const p = String(storePath || '').trim()
+        if (!p) { setMsg('先填一个素材库目录'); return }
+        setBusy('store'); setMsg('切换素材库位置中…')
+        const r = await jpost('/store/relocate', { path: p, copy: true })
+        setBusy('')
+        if (r.ok) {
+          setMsg(`已切换 · ${r.path} · ${r.store?.videos ?? 0} 条${r.copied ? '（已复制现有素材）' : ''}`)
+          setStorePath(r.path || p)
+          cfgRes.reload(); stats.reload()
+        } else setMsg('切换失败：' + (errText(r) || ''))
+      }
 
       return h('div', { 'data-wb-page': '' },
         h(PageHead, { title: '我的', sub: '登录、用户信息、账号数据、全局设置' },
@@ -1119,6 +1133,14 @@ window.__ModuleLoader__.load({
               `定时：${cfg?.enabled ? '开' : '关'}（${cfg?.scheduleRanges || '00:00-24:00'} · 每天上限 ${cfg?.perDay || 48} · 约每 ${cfgRes.data?.schedule?.estMinutes || '?'} 分钟 1 条）`,
               h('br'),
               `模型链：${(cfg?.modelChain || []).length} 个，当前 ${(cfg?.modelChain || [])[0] || '-'}`),
+            h(Field, { label: '素材库位置' },
+              h('input', {
+                'data-wb-input': '', style: { maxWidth: '430px' }, value: storePath,
+                placeholder: '~/.dsh-bili-workbench/store',
+                onChange: (e) => setStorePath(e.target.value),
+              }),
+              h(Btn, { sm: true, disabled: busy === 'store', onClick: relocate }, busy === 'store' ? '切换中…' : '保存并切换'),
+              h(Note, {}, '默认 ~/.dsh-bili-workbench/store；新目录为空时会复制现有素材，已有数据则直接切换')),
             h('div', { 'data-wb-row': '' },
               h(Btn, { sm: true, disabled: busy === 'log', onClick: showLog }, '看运行日志'),
               h(Btn, { sm: true, onClick: () => jpost('/open-folder', { what: 'store' }) }, '打开库目录'),

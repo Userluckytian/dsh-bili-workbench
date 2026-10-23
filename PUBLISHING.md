@@ -2,20 +2,17 @@
 
 这个目录 `dsh-bili-workbench-github/` 是干净的发布副本：**不含** `bili-store`、登录凭证、模型密钥、`node_modules`、成片 `runs/`。
 
-## 0. 先改占位符
+## 0. 仓库所有者
 
-全仓库搜索 `YOUR_GITHUB_USER`，替换成你的 GitHub 用户名（README、[PUBLISHING.md](PUBLISHING.md)）。`package.json` 目前没写 `repository`，创建仓库后可以补：
+已设为 `Userluckytian`，`package.json` 里的 `repository` / `homepage` / `bugs` 也已指向：
 
-```json
-"repository": { "type": "git", "url": "git+https://github.com/YOUR_GITHUB_USER/dsh-bili-workbench.git" },
-"homepage": "https://github.com/YOUR_GITHUB_USER/dsh-bili-workbench#readme",
-"bugs": { "url": "https://github.com/YOUR_GITHUB_USER/dsh-bili-workbench/issues" }
-```
+`https://github.com/Userluckytian/dsh-bili-workbench`
 
-## 1. 登录 GitHub CLI
+如果你 fork 到别的账号，全仓库替换 `Userluckytian` 即可。
 
-当前这台机器**还没登录**：
+## 1. 登录 GitHub
 
+优先 `gh auth login`。如果本机 Windows 凭据管理器里已有 GitHub 凭据，也可以直接用 `git push`，不必再登录 `gh`。
 ```bash
 gh auth login
 ```
@@ -53,7 +50,7 @@ gh repo edit --add-topic dsh-plugin \
 在另一台机器（或换一个 `DSH_HOME`）执行：
 
 ```bash
-dsh plugin --profile web add github:YOUR_GITHUB_USER/dsh-bili-workbench
+dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench
 ```
 
 重启 dsh，刷新页面，应出现「B站工作台」页签。首次安装会拉 Remotion / sharp，体积较大，耐心等。
@@ -76,9 +73,9 @@ dsh plugin --profile web add dsh-bili-workbench
 ## 6. 可选：打 tag / release
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
-gh release create v0.2.0 --generate-notes
+git tag v0.3.0
+git push origin v0.3.0
+gh release create v0.3.0 --generate-notes
 ```
 
 GitHub 直接安装不依赖 release，但 release 页面方便别人看更新说明。

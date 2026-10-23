@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-10-23
+
+- 「我的」页支持自定义素材库位置：默认 `~/.dsh-bili-workbench/store`，切换时新目录为空会自动复制现有素材，已有数据则直接切换
+- 素材库位置写入 `~/.dsh-bili-workbench/location.json`，重启后保持
+- 致谢收窄为灵感来源：dsh-bili-scroll（c1overzz）与 bili-cli（kukemc）
+- 修复素材库切换后计划 / 互动账本 / 配置路径仍指向旧目录的问题
+
 ## 0.2.0 — 2026-10-23
 
 首个公开版本。

@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join, dirname } from 'node:path'
 import { STORE } from './store.mjs'
 
-export const PLANS = join(STORE, 'plans')
+export const plansDir = () => join(STORE, 'plans')
 
 const readJson = (f, dflt = null) => {
   try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return dflt }
@@ -22,7 +22,7 @@ const writeJson = (f, obj) => {
   writeFileSync(f, JSON.stringify(obj, null, 2), 'utf8')
 }
 
-export const projectDir = (id) => join(PLANS, String(id))
+export const projectDir = (id) => join(plansDir(), String(id))
 
 const newId = () => `p-${new Date().toISOString().replace(/[:.]/g, '-')}`
 
@@ -33,7 +33,7 @@ export function planFile(id, v) {
 export function getVersion(id, v) {
   // 旧格式：id 本身就是 plans 下的文件名
   if (!existsSync(projectDir(id))) {
-    const legacy = join(PLANS, `${id}.json`)
+    const legacy = join(plansDir(), `${id}.json`)
     if (existsSync(legacy)) return readJson(legacy)
     return null
   }
@@ -43,7 +43,7 @@ export function getVersion(id, v) {
 export function getProject(id) {
   const dir = projectDir(id)
   if (!existsSync(dir)) {
-    const legacy = join(PLANS, `${id}.json`)
+    const legacy = join(plansDir(), `${id}.json`)
     if (!existsSync(legacy)) return null
     const plan = readJson(legacy)
     if (!plan) return null
@@ -66,7 +66,7 @@ export function saveProject(p) {
 
 /** 新项目：v1 + project.json */
 export function createProject(plan, { brief } = {}) {
-  mkdirSync(PLANS, { recursive: true })
+  mkdirSync(plansDir(), { recursive: true })
   const id = newId()
   const now = new Date().toISOString()
   const project = {
@@ -136,10 +136,10 @@ export function promptFor(id, v) {
 
 /** 列表：新格式 + 旧格式，按更新时间倒序 */
 export function listProjects() {
-  if (!existsSync(PLANS)) return []
+  if (!existsSync(plansDir())) return []
   const out = []
-  for (const name of readdirSync(PLANS)) {
-    const p = join(PLANS, name)
+  for (const name of readdirSync(plansDir())) {
+    const p = join(plansDir(), name)
     if (statSync(p).isDirectory()) {
       const project = getProject(name)
       if (project) out.push({ ...project, legacy: false })

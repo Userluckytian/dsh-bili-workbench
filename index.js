@@ -11,12 +11,16 @@
 import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, statSync,
-  createReadStream, unlinkSync,
+  createReadStream, unlinkSync, cpSync,
 } from 'node:fs'
-import { join, dirname, resolve } from 'node:path'
+import { join, dirname, resolve, sep, isAbsolute } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { runBili, fetchCover } from './engine/bili.mjs'
-import { list as storeList, get as storeGet, stats as storeStats, STORE, paths as storePaths } from './engine/store.mjs'
+import {
+  list as storeList, get as storeGet, stats as storeStats, STORE, paths as storePaths,
+  setStoreRoot, defaultStorePath, locationFile,
+} from './engine/store.mjs'
 import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
@@ -25,9 +29,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
 const BILI_OP = process.env.BILI_OP_DIR
   || (existsSync(join(HERE, 'bili-op', 'build.mjs')) ? join(HERE, 'bili-op') : join(HERE, '..', 'bili-op'))
-const CONFIG_FILE = join(STORE, 'config.json')
-const SCHEDULE_FILE = join(STORE, 'schedule.json')
-const LOG_FILE = join(STORE, 'duty.log')
+const configFile = () => join(STORE, 'config.json')
+const scheduleFile = () => join(STORE, 'schedule.json')
+const logFile = () => join(STORE, 'duty.log')
 
 export const name = 'bili-workbench'
 export const inject = ['webServer']
@@ -79,7 +83,7 @@ const DEFAULTS = {
 /* ───────────── 小工具 ───────────── */
 const log = (msg) => {
   const line = `${new Date().toISOString()}  ${msg}\n`
-  try { mkdirSync(STORE, { recursive: true }); writeFileSync(LOG_FILE, line, { flag: 'a' }) } catch { /* 写不进就算了 */ }
+  try { mkdirSync(STORE, { recursive: true }); writeFileSync(logFile(), line, { flag: 'a' }) } catch { /* 写不进就算了 */ }
 }
 
 const readJson = (f, dflt) => {
@@ -188,13 +192,13 @@ function normalizeCfg(c) {
   return out
 }
 
-const loadCfg = () => normalizeCfg(readJson(CONFIG_FILE, {}))
+const loadCfg = () => normalizeCfg(readJson(configFile(), {}))
 const saveCfg = (patch) => {
   const cfg = normalizeCfg({ ...loadCfg(), ...patch })
-  writeJson(CONFIG_FILE, cfg)
+  writeJson(configFile(), cfg)
   return cfg
 }
-const loadSched = () => readJson(SCHEDULE_FILE, { lastRunAt: '', lastResult: '' })
+const loadSched = () => readJson(scheduleFile(), { lastRunAt: '', lastResult: '' })
 
 /** 跑引擎脚本（子进程），返回输出尾巴 */
 function runEngine(script, args = [], timeoutMs = 20 * 60_000) {
@@ -268,7 +272,7 @@ async function runRound(why = 'manual', { count = 1 } = {}) {
         outs.push(search.text)
         if (!search.ok) log('关键词采集失败：' + search.text.slice(-500))
       }
-      writeJson(SCHEDULE_FILE, { ...sched, kwIdx: (idx + 1) % cfg.keywords.length })
+      writeJson(scheduleFile(), { ...sched, kwIdx: (idx + 1) % cfg.keywords.length })
       log(`轮次(${why})：热门 ${hotN} + 关键词「${kw}」${kwN} 条`)
     } else {
       const hot = await runEngine('collect.mjs', [
@@ -305,7 +309,7 @@ async function runRound(why = 'manual', { count = 1 } = {}) {
     await applyAutoFavorite(cfg)
 
     const sec = Math.round((Date.now() - t0) / 1000)
-    writeJson(SCHEDULE_FILE, {
+    writeJson(scheduleFile(), {
       ...loadSched(),
       lastRunAt: new Date().toISOString(),
       lastWhy: why,
@@ -340,7 +344,7 @@ async function applyAutoFavorite(cfg) {
     const res = runBili(['video', 'fav', r.bvid, '--folder', cfg.favFolderId], { timeoutMs: 30000 })
     if (res.ok) {
       marked[r.bvid] = new Date().toISOString()
-      writeJson(CONFIG_FILE, { ...loadCfg(), favMarked: marked })
+      writeJson(configFile(), { ...loadCfg(), favMarked: marked })
       log(`已收藏 ${r.bvid} → ${cfg.favFolderId}`)
     } else {
       log(`收藏失败 ${r.bvid}：${res.error?.message || res.error?.code || ''}`)
@@ -652,6 +656,46 @@ export function apply(ctx) {
     if (req.method === 'POST' && path === '/store/daily') {
       const r = await runEngine('daily.mjs', ['--level', loadCfg().reportLevel])
       return sendJson(res, 200, { ok: r.ok, text: r.text.slice(-2000) })
+    }
+    if (req.method === 'POST' && path === '/store/relocate') {
+      if (roundRunning) return sendJson(res, 200, { ok: false, error: '采集轮次正在跑，等它结束再切' })
+      if ([...jobs.values()].some((j) => j.stage === 'running')) {
+        return sendJson(res, 200, { ok: false, error: '有渲染任务正在跑，等它结束再切' })
+      }
+      const body = await readBody(req)
+      const raw = String(body.path || '').trim()
+      if (!raw) return sendJson(res, 200, { ok: false, error: '先填一个素材库目录' })
+      const target = resolve(raw.replace(/^~(?=$|[\\/])/, homedir()))
+      const old = STORE
+      const lc = (s) => s.replace(/[\\/]+$/, '').toLowerCase()
+      if (lc(target) === lc(old)) {
+        return sendJson(res, 200, { ok: true, path: old, copied: false, store: storeStats() })
+      }
+      if (lc(target).startsWith(lc(old) + sep) || lc(old).startsWith(lc(target) + sep)) {
+        return sendJson(res, 200, { ok: false, error: '不能选当前素材库的子目录或上级目录' })
+      }
+      try {
+        if (existsSync(target) && !statSync(target).isDirectory()) {
+          return sendJson(res, 200, { ok: false, error: '这个路径是一个文件，不是目录' })
+        }
+        mkdirSync(target, { recursive: true })
+        const videosDir = join(target, 'videos')
+        const hasData = existsSync(join(target, 'config.json'))
+          || (existsSync(videosDir) && readdirSync(videosDir).some((f) => f.endsWith('.json')))
+        let copied = false
+        if (body.copy !== false && !hasData) {
+          cpSync(old, target, { recursive: true, force: false, errorOnExist: false })
+          copied = true
+        }
+        const p = setStoreRoot(target)
+        log(`素材库位置切换：${old} → ${p}${copied ? '（已复制现有素材）' : ''}`)
+        return sendJson(res, 200, {
+          ok: true, path: p, copied, store: storeStats(),
+          defaultPath: defaultStorePath(), locationFile: locationFile(),
+        })
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
+      }
     }
 
     /* ══════════ 创作：方案（项目 + 版本） ══════════ */
@@ -978,8 +1022,8 @@ export function apply(ctx) {
       return sendJson(res, 200, r)
     }
     if (req.method === 'GET' && path === '/duty-log') {
-      if (!existsSync(LOG_FILE)) return sendJson(res, 200, { ok: true, text: '' })
-      const t = readFileSync(LOG_FILE, 'utf8')
+      if (!existsSync(logFile())) return sendJson(res, 200, { ok: true, text: '' })
+      const t = readFileSync(logFile(), 'utf8')
       return sendJson(res, 200, { ok: true, text: t.slice(-12000) })
     }
     if (req.method === 'POST' && path === '/open-folder') {

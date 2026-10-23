@@ -35,15 +35,15 @@
 ### 方式 A：从 GitHub 直接装（推荐）
 
 ```bash
-dsh plugin --profile web add github:YOUR_GITHUB_USER/dsh-bili-workbench
+dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench
 ```
 
-> 把 `YOUR_GITHUB_USER` 换成仓库所有者。pnpm 会同时安装插件依赖（Remotion / sharp）。
+> 仓库所有者是 `Userluckytian`；如果你 fork 了，把用户名换成自己的。pnpm 会同时安装插件依赖（Remotion / sharp）。
 
 ### 方式 B：克隆后 link（想改代码）
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/dsh-bili-workbench.git
+git clone https://github.com/Userluckytian/dsh-bili-workbench.git
 cd dsh-bili-workbench
 npm install
 dsh plugin --profile web add link:$PWD
@@ -52,7 +52,7 @@ dsh plugin --profile web add link:$PWD
 Windows PowerShell：
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_USER/dsh-bili-workbench.git
+git clone https://github.com/Userluckytian/dsh-bili-workbench.git
 cd dsh-bili-workbench
 npm install
 dsh plugin --profile web add "link:$PWD"
@@ -128,7 +128,12 @@ node scripts/doctor.mjs
   interactions.json     已评论 / 已回复账本
 ```
 
-如果目录里存在原项目的 `D:\AI_projects\bibilili\bili-store`，会优先使用它；否则用 `~/.dsh-bili-workbench/store`。也可以用 `BILI_STORE` 显式指定。
+默认位置是 `~/.dsh-bili-workbench/store`；从原项目迁移的机器上，如果存在 `D:\AI_projects\bibilili\bili-store` 且没有设置 `BILI_STORE`，会自动使用旧目录。也可以：
+
+- 在「我的 → 素材库与运行 → 素材库位置」里直接改，保存后即时切换；新目录为空时会复制现有素材
+- 用环境变量 `BILI_STORE` 指定
+
+选择过的位置会写进 `~/.dsh-bili-workbench/location.json`，重启后保持不变。
 
 常用环境变量：
 
@@ -181,18 +186,13 @@ scripts/doctor.mjs       环境自检
 
 ## 致谢与许可
 
-本项目以 **MIT** 发布。完整第三方署名见 [NOTICE.md](NOTICE.md)，上游贡献者见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+本项目以 **MIT** 发布。
 
-主要参考 / 依赖：
+灵感来源：
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) —— dsh 插件宿主与运行时
-- [dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll) —— 前身「刷B站」插件，字段、调度与互动设计参考
-- [bili-cli](https://github.com/kukemc/bili-cli)（MIT）—— B站 账号操作 CLI
-- [bilibili-api-python](https://github.com/Nemo2011/bilibili-api)（GPL-3.0+，由 bili-cli 使用，未随本项目分发）
-- [Remotion](https://www.remotion.dev/) —— React 视频渲染（使用前请确认其授权条款）
-- [edge-tts](https://github.com/rany2/edge-tts)（LGPL-3.0）—— 配音
-- [FFmpeg](https://ffmpeg.org/) —— 混音 / 烧字幕
-- [sharp](https://github.com/lovell/sharp)（Apache-2.0）—— 封面合成
-- [bilibili-mcp](https://github.com/adoresever/bilibili-mcp)（MIT，Copyright (c) 2026 AGI_Ananas）—— 前身插件曾内置，本项目未直接分发
+- [dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll)（c1overzz，MIT）—— 前身「刷B站」插件，字段、调度与互动设计参考
+- [bili-cli](https://github.com/kukemc/bili-cli)（kukemc，MIT）—— B站 账号操作 CLI
+
+其他运行时依赖（Remotion、edge-tts、FFmpeg 等）遵循各自许可证，详见 [NOTICE.md](NOTICE.md)。Remotion 不是 OSI 许可证，商业使用前请自行确认其授权条款。
 
 > 本项目与哔哩哔哩官方无关联。使用本工具产生的账号行为、内容与后果由使用者自行承担。

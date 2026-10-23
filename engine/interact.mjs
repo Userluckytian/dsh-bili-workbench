@@ -17,21 +17,21 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { STORE } from './store.mjs'
 
-const FILE = join(STORE, 'interactions.json')
+const file = () => join(STORE, 'interactions.json')
 const EMPTY = { daily: {}, commented: {}, replied: {}, dm: {} }
 
 export const today = () => new Date().toLocaleDateString('sv-SE')
 
 export function load() {
   try {
-    const j = JSON.parse(readFileSync(FILE, 'utf8'))
+    const j = JSON.parse(readFileSync(file(), 'utf8'))
     return { ...EMPTY, ...j, daily: j.daily || {}, commented: j.commented || {}, replied: j.replied || {}, dm: j.dm || {} }
   } catch { return JSON.parse(JSON.stringify(EMPTY)) }
 }
 
 function save(db) {
-  mkdirSync(dirname(FILE), { recursive: true })
-  writeFileSync(FILE, JSON.stringify(db, null, 2), 'utf8')
+  mkdirSync(dirname(file()), { recursive: true })
+  writeFileSync(file(), JSON.stringify(db, null, 2), 'utf8')
   return db
 }
 
