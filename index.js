@@ -11,7 +11,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, statSync,
-  createReadStream, unlinkSync, cpSync,
+  createReadStream, unlinkSync, cpSync, rmSync,
 } from 'node:fs'
 import { join, dirname, resolve, sep, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
@@ -826,6 +826,31 @@ export function apply(ctx) {
       try { return sendJson(res, 200, { ok: true, prompt: plans.promptFor(id, v) }) } catch (e) {
         return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
       }
+    }
+    if (req.method === 'POST' && path === '/create/delete') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const p = plans.getProject(id)
+      if (!p) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      if (activeJob(p.id)) return sendJson(res, 200, { ok: false, error: '这个项目正在渲染，等渲染完再删' })
+      const runDir = String(p.runDir || '')
+      const ok = plans.deleteProject(id)
+      let removedRun = false
+      if (ok && runDir && existsSync(runDir)) {
+        const norm = runDir.replace(/\//g, '\\').toLowerCase()
+        if (norm.includes('\\renders\\') || norm.includes('\\runs\\')) {
+          try { rmSync(runDir, { recursive: true, force: true }); removedRun = true } catch { /* 文件被占用就留着 */ }
+        }
+      }
+      if (ok) {
+        for (const t of tasks.list()) {
+          if (t.projectId !== id) continue
+          tasks.update(t.id, { projectId: '', planTitle: '', status: 'paused' })
+          tasks.addLog(t.id, '关联方案已删除，任务暂停')
+        }
+      }
+      log(`删除方案 ${id}${removedRun ? '（含成片）' : ''}`)
+      return sendJson(res, 200, { ok, removedRun })
     }
 
     /* ══════════ 长任务：素材不够就自己去 B站 找 ══════════ */

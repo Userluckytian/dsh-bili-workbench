@@ -814,6 +814,9 @@ window.__ModuleLoader__.load({
       const [viewPlan, setViewPlan] = useState(null)
       const [preview, setPreview] = useState('')
       const [logOpen, setLogOpen] = useState(false)
+      const [delArmed, setDelArmed] = useState(false)
+      const delTimer = useRef(null)
+      useEffect(() => () => clearTimeout(delTimer.current), [])
       const plan = viewV ? (viewPlan || p.plan) : p.plan
       const job = p.job
       const stage = job?.stage === 'running' ? 'rendering' : p.stage
@@ -860,6 +863,22 @@ window.__ModuleLoader__.load({
         if (!runId) return
         setPreview(preview ? '' : `/api/bili-wb/review/media?runId=${encodeURIComponent(runId)}&kind=video`)
       }
+      const remove = async () => {
+        if (busy === 'del') return
+        if (!delArmed) {
+          setDelArmed(true)
+          clearTimeout(delTimer.current)
+          delTimer.current = setTimeout(() => setDelArmed(false), 4000)
+          return
+        }
+        clearTimeout(delTimer.current)
+        setDelArmed(false)
+        setBusy('del'); setMsg('删除中…')
+        const r = await jpost('/create/delete', { id: p.id })
+        setBusy('')
+        if (r.ok) onChange?.()
+        else setMsg('删除失败：' + (errText(r) || ''))
+      }
 
       return h('div', { 'data-wb-sec': '', 'data-wb-project': p.id },
         h('div', { 'data-wb-row': '' },
@@ -889,6 +908,10 @@ window.__ModuleLoader__.load({
           h(Btn, { sm: true, onClick: () => setShowShots(!showShots) }, showShots ? '收起分镜' : '看分镜'),
           h(Btn, { sm: true, disabled: busy === 'render' || job?.stage === 'running', onClick: render }, job?.stage === 'running' ? '渲染中…' : (pct === 100 ? '重新渲染' : '开始渲染')),
           h(Btn, { sm: true, disabled: !pct || !runId, onClick: togglePreview }, '预览成片'),
+          h(Btn, {
+            sm: true, disabled: Boolean(busy), onClick: remove,
+            style: delArmed ? { color: '#f87171', borderColor: 'rgba(248,113,113,.5)' } : undefined,
+          }, busy === 'del' ? '删除中…' : delArmed ? '确认删除？' : '删除方案'),
           h('div', { 'data-wb-grow': '' }),
           h('span', { 'data-wb-meta': '' }, `引用素材 ${picks.length} 处${basket.length ? ` · 创作篮 ${basket.length}` : ''}`)),
         showShots ? h('div', { 'data-wb-col': '' }, ...shots.map((s, i) => h('div', { key: i, 'data-wb-quote': '' },

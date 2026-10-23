@@ -8,7 +8,7 @@
  *
  * 兼容旧格式：plans/<时间戳>.json 当成只有 v1 的只读项目，id = 文件名（不含 .json）。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { STORE } from './store.mjs'
 
@@ -115,6 +115,19 @@ export function addVersion(id, plan, { instruction = '' } = {}) {
   project.review = null
   saveProject(project)
   return project
+}
+
+/** 删除项目：新格式删整个项目目录；旧格式删 plans/<id>.json */
+export function deleteProject(id) {
+  const p = getProject(id)
+  if (!p) return false
+  if (p.legacy) {
+    const f = join(plansDir(), `${id}.json`)
+    if (existsSync(f)) unlinkSync(f)
+    return true
+  }
+  rmSync(projectDir(id), { recursive: true, force: true })
+  return true
 }
 
 /** 给「在对话里接着聊」用的提示词：当前选题/大纲/选料一次打包 */
