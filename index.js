@@ -25,7 +25,7 @@ import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
 import * as tasks from './engine/taskstore.mjs'
-import { answerOwnerCommand, auditMessage } from './engine/owner.mjs'
+import { answerOwnerCommand, auditMessage, mentionTargets, callNames } from './engine/owner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -69,6 +69,7 @@ const DEFAULTS = {
   ownerUid: '',                  // 主人 B站 UID；只有这个 UID 的指令会被特殊处理
   ownerCall: '老弟',              // 评论/回复里怎么称呼主人
   mentionName: '',               // 额外 @ 谁；留空=主人 UID / 当前登录账号
+  mentions: [],                  // [{ target: UID/昵称, call: 称呼 }]，可多人
   replyPerDay: 20,
   dmWatch: false,
   dmWatchMinutes: 5,
@@ -180,6 +181,10 @@ function normalizeCfg(c) {
   out.ownerUid = String(out.ownerUid || '').trim().slice(0, 20)
   out.ownerCall = String(out.ownerCall || '老弟').trim().slice(0, 10) || '老弟'
   out.mentionName = String(out.mentionName || '').slice(0, 40)
+  out.mentions = (Array.isArray(out.mentions) ? out.mentions : [])
+    .map((m) => ({ target: String(m?.target || '').trim().slice(0, 60), call: String(m?.call || '').trim().slice(0, 10) }))
+    .filter((m) => m.target)
+    .slice(0, out.ownerUid ? 2 : 3)
   out.replyPerDay = clampNum(out.replyPerDay, 0, 200, 20)
   out.dmWatch = Boolean(out.dmWatch)
   out.dmWatchMinutes = clampNum(out.dmWatchMinutes, 3, 240, 5)
@@ -268,8 +273,6 @@ function kickTask(id = '') {
         const remain = Math.max(0, cfg.perDay - done)
         if (remain > 0) {
           const aArgs = ['--limit', String(Math.min(remain, 5))]
-          const mention = cfg.ownerUid || cfg.mentionName
-          if (mention) aArgs.push('--mention', mention)
           const ac = await runEngine('auto-comment.mjs', aArgs, 10 * 60_000)
           if (ac.text) log('任务采集后自动评论：' + ac.text.slice(-400))
         }
@@ -337,8 +340,7 @@ async function runRound(why = 'manual', { count = 1 } = {}) {
       const remain = Math.max(0, cfg.perDay - done)
       if (remain > 0) {
         const aArgs = ['--limit', String(Math.min(remain, 5))]
-        const mention = cfg.ownerUid || cfg.mentionName
-        if (mention) aArgs.push('--mention', mention)
+        // @ 谁和称呼由 auto-comment.mjs 直接读配置（支持多人）
         autoComment = await runEngine('auto-comment.mjs', aArgs, 10 * 60_000)
         log('自动评论：' + autoComment.text.slice(-400))
       } else {
@@ -1110,7 +1112,7 @@ export function apply(ctx) {
       }
       if (!text) {
         const ctx = kind === 'comment'
-          ? { title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall }
+          ? { title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall, calls: callNames(cfg) }
           : {
             message: body.message || '', replyingTo: body.replyingTo || '', video: body.video || '',
             owner: body.owner === true, ownerCall: cfg.ownerCall,
@@ -1144,8 +1146,7 @@ export function apply(ctx) {
         const bv = String(body.bv || '').trim()
         if (!BV_RE.test(bv)) return sendJson(res, 200, { ok: false, error: 'BV 号不对' })
         args.push('comment', 'post', bv, text)
-        const mention = cfg.ownerUid || cfg.mentionName
-        if (mention) args.push('--at', mention)
+        for (const t of mentionTargets(cfg)) args.push('--at', t.target)
       } else if (kind === 'reply') {
         const bv = String(body.bv || '').trim()
         const rpid = String(body.rpid || '').trim()
@@ -1193,7 +1194,7 @@ export function apply(ctx) {
       const copyKeys = [
         'enabled', 'keywords', 'llmKey', 'scheduleRanges', 'perDay',
         'personaPrompt', 'reportLevel', 'favFolderId',
-        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'replyPerDay',
+        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
         'voice', 'modelChain', 'concurrency',
         'publishEnabled', 'defaultTags', 'defaultZone',

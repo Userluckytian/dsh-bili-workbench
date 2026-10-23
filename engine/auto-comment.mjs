@@ -13,7 +13,7 @@ import { list } from './store.mjs'
 import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
-import { ownerInfo } from './owner.mjs'
+import { ownerInfo, mentionTargets, callNames } from './owner.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -27,29 +27,39 @@ const localDay = (iso) => {
 const today = () => new Date().toLocaleDateString('sv-SE')
 const log = (s) => console.log(s)
 
-/** @ 谁：优先参数；否则用主人 UID；再否则用当前登录账号的 mid */
-function resolveMention(ownerUid) {
+/** @ 谁：主人 + 配置里的 mentions；--mention 可再补一个；都没有就用当前登录账号 */
+function resolveMentions() {
+  const targets = mentionTargets()
   const given = String(arg('mention', '') || '').trim()
-  if (given) return given
-  if (ownerUid) return ownerUid
-  try {
-    const r = runBili(['auth', 'status'], { timeoutMs: 20000 })
-    return String(r.data?.user?.mid || '')
-  } catch { return '' }
+  if (given && targets.length < 3 && !targets.some((x) => x.target === given)) {
+    targets.push({ target: given, call: '' })
+  }
+  if (!targets.length) {
+    try {
+      const r = runBili(['auth', 'status'], { timeoutMs: 20000 })
+      const mid = String(r.data?.user?.mid || '')
+      if (mid) targets.push({ target: mid, call: '' })
+    } catch { /* 没登录就只发评论不 @ */ }
+  }
+  return targets.slice(0, 3)
 }
 
-/** 评论里必须出现对主人的称呼；模型没写就补在开头 */
-function ensureOwnerCall(text, call) {
+/** 评论里必须出现配置的称呼；模型没写就补在开头 */
+function ensureCalls(text, calls) {
   const t = String(text || '').trim()
-  if (!t || !call || t.includes(call)) return t
-  return `${call}，${t}`.slice(0, 60)
+  if (!t) return t
+  const list = (calls || []).map((c) => String(c || '').trim()).filter(Boolean)
+  const missing = list.filter((c) => !t.includes(c))
+  if (!missing.length) return t
+  return `${missing.join('、')}，${t}`.slice(0, 60)
 }
 
 async function main() {
   const dryRun = flag('dry-run')
   const limit = Math.max(1, Math.min(Number(arg('limit', 3)) || 3, 20))
   const owner = ownerInfo()
-  const mention = resolveMention(owner.uid)
+  const targets = resolveMentions()
+  const calls = callNames()
   const persona = String(process.env.BILI_OP_PERSONA || '')
 
   const rows = list({ limit: 2000 })
@@ -57,7 +67,7 @@ async function main() {
     .slice(0, limit)
 
   if (!rows.length) { log('没有需要评论的新视频'); return }
-  log(`待评论 ${rows.length} 条${dryRun ? '（dry-run）' : ''}${mention ? ` · @ ${mention}` : ''}${owner.call ? ` · 称呼 ${owner.call}` : ''}`)
+  log(`待评论 ${rows.length} 条${dryRun ? '（dry-run）' : ''}${targets.length ? ` · @ ${targets.map((x) => x.target).join(', ')}` : ''}${calls.length ? ` · 称呼 ${calls.join(' / ')}` : ''}`)
 
   let ok = 0, fail = 0
   for (const rec of rows) {
@@ -68,11 +78,12 @@ async function main() {
       memes: (rec.memes || []).slice(0, 3),
       hotComments: (rec.hotComments || []).slice(0, 3).map((x) => x.text),
       ownerCall: owner.call,
+      calls,
     }
     let text = ''
     try {
       const c = await composeText('comment', ctx, persona)
-      text = ensureOwnerCall(c.text, owner.call)
+      text = ensureCalls(c.text, calls)
     } catch (e) {
       log(`  ✗ ${rec.bvid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
       fail++
@@ -83,7 +94,7 @@ async function main() {
     const args = []
     if (dryRun) args.push('--dry-run')
     args.push('comment', 'post', rec.bvid, text)
-    if (mention) args.push('--at', mention)
+    for (const t of targets) args.push('--at', t.target)
     const r = runBili(args, { timeoutMs: 60000 })
     if (r.ok) {
       if (!dryRun) interact.markComment(rec.bvid, { rpid: r.data?.rpid || 0, text })

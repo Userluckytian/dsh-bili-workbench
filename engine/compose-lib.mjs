@@ -13,6 +13,9 @@ export async function composeText(kind, ctx = {}, persona = '') {
   const k = ['comment', 'reply', 'owner', 'dm'].includes(requested) ? requested : 'comment'
   const p = String(persona || '').trim()
   const call = String(ctx.ownerCall || '老弟').trim() || '老弟'
+  const calls = (Array.isArray(ctx.calls) ? ctx.calls : (k === 'comment' && ctx.ownerCall ? [ctx.ownerCall] : []))
+    .map((c) => String(c || '').trim()).filter(Boolean)
+  const callText = calls.map((c) => `「${c}」`).join('、')
   const label = k === 'comment' ? '视频评论' : k === 'reply' ? '评论回复' : k === 'owner' ? '给主人的回复' : '私信'
 
   const system = k === 'owner'
@@ -30,13 +33,15 @@ ${p ? `- 你的人设 / 口径：${p}` : ''}`
 - 说人话，像真人随手打的，不要客服腔、不要「感谢分享」这种套话
 - 不超过 ${LIMITS[k]} 个汉字
 - 只输出正文，不要引号、不要解释
-${k === 'comment' ? `- 评论里要称呼主人为「${call}」，并自然带上这个词\n` : ''}${p ? `- 你的人设 / 口径：${p}` : ''}`
+${k === 'comment' && calls.length ? `- 评论里要自然称呼：${callText}，这些词都要出现在正文里\n` : ''}${p ? `- 你的人设 / 口径：${p}` : ''}`
 
   const user = k === 'comment'
     ? `视频：${ctx.title || ''}\nUP：${ctx.up || ''}\n可用金句：${(ctx.quotes || []).slice(0, 3).join('；') || '（无）'}\n`
       + `${(ctx.memes || []).length ? `热梗：${(ctx.memes || []).slice(0, 3).join('；')}\n` : ''}`
       + `${(ctx.hotComments || []).length ? `热评：${(ctx.hotComments || []).slice(0, 3).join('；')}\n` : ''}`
-      + `请写一条像看过视频的短评论，并自然称呼主人为「${call}」。`
+      + (calls.length
+        ? `请写一条像看过视频的短评论，并自然地称呼 ${callText}。`
+        : '请写一条像看过视频的短评论。')
     : k === 'owner'
       ? `主人说：${ctx.message || ''}\n${ctx.stats ? `本地实时数据：${ctx.stats}\n` : ''}请回复主人。`
       : `对方说：${ctx.message || ''}\n${ctx.replyingTo ? `（他回复的是：${ctx.replyingTo}）\n` : ''}${ctx.video ? `视频：${ctx.video}\n` : ''}请写一条自然的回复。`

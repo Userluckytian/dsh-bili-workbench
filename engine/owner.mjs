@@ -40,6 +40,34 @@ export function isOwnerMid(mid, cfg = loadCfg()) {
   return Boolean(uid && String(mid || '') === uid)
 }
 
+/** 自动评论要 @ 的人：主人 + mentions 列表（可多人），按 target 去重 */
+export function mentionTargets(cfg = loadCfg()) {
+  const out = []
+  const seen = new Set()
+  const add = (target, call = '') => {
+    const t = String(target || '').trim()
+    if (!t || seen.has(t)) return
+    seen.add(t)
+    out.push({ target: t, call: String(call || '').trim() })
+  }
+  if (cfg.ownerUid) add(cfg.ownerUid, cfg.ownerCall)
+  for (const m of (Array.isArray(cfg.mentions) ? cfg.mentions : [])) add(m?.target, m?.call)
+  // 兼容老字段：没有主人 UID 时才用它，避免和主人重复
+  if (!cfg.ownerUid && cfg.mentionName) add(cfg.mentionName, '')
+  // B站 一条评论最多 @ 3 个人
+  return out.slice(0, 3)
+}
+
+/** 评论里要自然喊出的称呼：主人称呼 + 每个额外 @ 的称呼（同一个 target 只算一次） */
+export function callNames(cfg = loadCfg()) {
+  const out = []
+  for (const t of mentionTargets(cfg)) {
+    const c = String(t.call || '').trim()
+    if (c && !out.includes(c)) out.push(c)
+  }
+  return out
+}
+
 /* ── 时段解析（和 index.js 的 rangeProgress 保持一致） ── */
 function parseRanges(str) {
   return String(str || '')

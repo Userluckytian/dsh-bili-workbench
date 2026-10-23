@@ -585,14 +585,23 @@ window.__ModuleLoader__.load({
         }) : null,
         h(Err, {}, err),
         loading ? h('div', { 'data-wb-loading': '' }, '读取中…') : null,
-        d ? h(Sec, { title: '看懂视频' },
-          h('div', { 'data-wb-row': '' },
-            h('div', { 'data-wb-cardtitle': '' }, d.title || detail),
-            h('div', { 'data-wb-grow': '' }),
-            h(Btn, { sm: true, onClick: () => setDetail('') }, '收起')),
-          h('div', { 'data-wb-meta': '' }, [d.owner?.name, d.stat ? `播放 ${fmtNum(d.stat.view)} · 点赞 ${fmtNum(d.stat.like)}` : '', fmtDur(d.duration)].filter(Boolean).join(' · ')),
-          d.ai_summary ? h('div', { 'data-wb-why': '' }, d.ai_summary) : null,
-          d.transcript?.text ? h('pre', { 'data-wb-pre': '' }, String(d.transcript.text).slice(0, 2500)) : h(Note, {}, '这条没有字幕；已落库，但创作时引用不到原句。')) : null,
+        detail ? h('div', {
+          'data-wb-overlay': '',
+          onClick: (e) => { if (e.target === e.currentTarget) setDetail('') },
+        },
+          h('button', { className: 'x', onClick: () => setDetail('') }, '✕'),
+          h('div', { 'data-wb-sec': '', style: { width: 'min(920px, 96%)', maxHeight: '88%', overflow: 'auto', margin: 0 } },
+            watch.loading ? h('div', { 'data-wb-loading': '' }, '读取视频…') : null,
+            watch.err ? h(Err, {}, watch.err) : null,
+            d ? [
+              h('div', { 'data-wb-row': '' },
+                h('div', { 'data-wb-cardtitle': '' }, d.title || detail),
+                h('div', { 'data-wb-grow': '' }),
+                h(Btn, { sm: true, onClick: () => setDetail('') }, '收起')),
+              h('div', { 'data-wb-meta': '' }, [d.owner?.name, d.stat ? `播放 ${fmtNum(d.stat.view)} · 点赞 ${fmtNum(d.stat.like)}` : '', fmtDur(d.duration)].filter(Boolean).join(' · ')),
+              d.ai_summary ? h('div', { 'data-wb-why': '' }, d.ai_summary) : null,
+              d.transcript?.text ? h('pre', { 'data-wb-pre': '' }, String(d.transcript.text).slice(0, 2500)) : h(Note, {}, '这条没有字幕；已落库，但创作时引用不到原句。'),
+            ] : null)) : null,
         h('div', { 'data-wb-grid': '' }, ...items.map((it) => h(VideoCard, {
           key: it.bvid, it,
           tier: storeMap[it.bvid]?.tier || '',
@@ -675,12 +684,19 @@ window.__ModuleLoader__.load({
             keywordsText: (cfg.keywords || []).join('\n'),
             modelChainText: (cfg.modelChain || []).join('\n'),
             tagsText: (cfg.defaultTags || []).join(','),
+            mentions: (cfg.mentions || []).map((m) => ({ ...m })),
           })
         }
       }, [cfg, draft])
       if (cfgRes.loading || !draft) return h('div', { 'data-wb-loading': '' }, '读设置中…')
 
       const set = (k, v) => setDraft({ ...draft, [k]: v })
+      const setMention = (i, k, v) => setDraft({
+        ...draft,
+        mentions: (draft.mentions || []).map((m, idx) => (idx === i ? { ...m, [k]: v } : m)),
+      })
+      const addMention = () => setDraft({ ...draft, mentions: [...(draft.mentions || []), { target: '', call: '' }] })
+      const delMention = (i) => setDraft({ ...draft, mentions: (draft.mentions || []).filter((_, idx) => idx !== i) })
       const save = async () => {
         setBusy('save'); setMsg('保存中…')
         const r = await jpost('/config', {
@@ -690,7 +706,8 @@ window.__ModuleLoader__.load({
           personaPrompt: draft.personaPrompt, reportLevel: draft.reportLevel, favFolderId: draft.favFolderId,
           autoComment: draft.autoComment, autoReply: draft.autoReply,
           ownerUid: draft.ownerUid, ownerCall: draft.ownerCall,
-          mentionName: draft.mentionName, replyPerDay: draft.replyPerDay,
+          mentionName: draft.mentionName, mentions: (draft.mentions || []).filter((m) => String(m.target || '').trim()),
+          replyPerDay: draft.replyPerDay,
           dmWatch: draft.dmWatch, dmWatchMinutes: draft.dmWatchMinutes,
           voice: draft.voice, modelChain: String(draft.modelChainText || '').split('\n').map((s) => s.trim()).filter(Boolean),
         })
@@ -755,9 +772,22 @@ window.__ModuleLoader__.load({
             h('label', { 'data-wb-toggle': '' },
               h('input', { type: 'checkbox', checked: Boolean(draft.autoComment), onChange: (e) => set('autoComment', e.target.checked) }),
               h('span', {}, '自动评论并 @ 主人（每条采到的视频都留一条）')),
-            h(Field, { label: '额外 @（可选）' },
-              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.mentionName || '', onChange: (e) => set('mentionName', e.target.value), placeholder: '留空=主人 UID' }),
-              h(Note, {}, '只发在评论区，不私信')),
+            h('div', { 'data-wb-col': '' },
+              h('div', { 'data-wb-h': '' }, '额外 @（可多人）'),
+              h(Note, {}, `自动评论会 @ 这些人，并按「称呼」自然喊出来。B站一条评论最多 @ 3 人（含主人 UID），所以这里最多再加 ${draft.ownerUid ? 2 : 3} 个；主人 UID 会自动 @，不用重复加。`),
+              ...(draft.mentions || []).map((m, i) => h('div', { key: i, 'data-wb-row': '' },
+                h('input', {
+                  'data-wb-input': '', style: { maxWidth: '200px' }, value: m.target || '',
+                  onChange: (e) => setMention(i, 'target', e.target.value), placeholder: 'UID 或昵称',
+                }),
+                h('input', {
+                  'data-wb-input': '', style: { maxWidth: '130px' }, value: m.call || '',
+                  onChange: (e) => setMention(i, 'call', e.target.value), placeholder: '称呼，如 爸爸',
+                }),
+                h(Btn, { sm: true, onClick: () => delMention(i) }, '移除'))),
+              (draft.mentions || []).length < (draft.ownerUid ? 2 : 3)
+                ? h('div', { 'data-wb-row': '' }, h(Btn, { sm: true, onClick: addMention }, '+ 加一个人'))
+                : h(Note, {}, '已达到 3 个 @ 上限')),
             h('div', { 'data-wb-row': '', style: { marginTop: '4px' } },
               h('label', { 'data-wb-toggle': '' },
                 h('input', { type: 'checkbox', checked: Boolean(draft.autoReply), onChange: (e) => set('autoReply', e.target.checked) }),
