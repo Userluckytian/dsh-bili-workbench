@@ -24,6 +24,7 @@ import {
 import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
 import * as interact from './engine/interact.mjs'
+import { answerOwnerCommand } from './engine/owner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -64,7 +65,9 @@ const DEFAULTS = {
   /* 互动：默认关；打开后按配置自动执行（本机实例已单独打开） */
   autoComment: false,
   autoReply: false,
-  mentionName: '',               // @ 谁；留空=当前登录账号
+  ownerUid: '',                  // 主人 B站 UID；只有这个 UID 的指令会被特殊处理
+  ownerCall: '老弟',              // 评论/回复里怎么称呼主人
+  mentionName: '',               // 额外 @ 谁；留空=主人 UID / 当前登录账号
   replyPerDay: 20,
   dmWatch: false,
   dmWatchMinutes: 5,
@@ -173,6 +176,8 @@ function normalizeCfg(c) {
   out.favFolderId = String(out.favFolderId || '').slice(0, 60)
   out.autoComment = out.autoComment !== false
   out.autoReply = out.autoReply !== false
+  out.ownerUid = String(out.ownerUid || '').trim().slice(0, 20)
+  out.ownerCall = String(out.ownerCall || '老弟').trim().slice(0, 10) || '老弟'
   out.mentionName = String(out.mentionName || '').slice(0, 40)
   out.replyPerDay = clampNum(out.replyPerDay, 0, 200, 20)
   out.dmWatch = Boolean(out.dmWatch)
@@ -211,6 +216,8 @@ function runEngine(script, args = [], timeoutMs = 20 * 60_000) {
       BILI_OP_MODELS: cfg.modelChain.join(','),
     }
     if (cfg.personaPrompt) env.BILI_OP_PERSONA = cfg.personaPrompt
+    if (cfg.ownerUid) env.BILI_OWNER_UID = cfg.ownerUid
+    if (cfg.ownerCall) env.BILI_OWNER_CALL = cfg.ownerCall
     if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
     let out = ''
     let done = false
@@ -295,7 +302,8 @@ async function runRound(why = 'manual', { count = 1 } = {}) {
       const remain = Math.max(0, cfg.perDay - done)
       if (remain > 0) {
         const aArgs = ['--limit', String(Math.min(remain, 5))]
-        if (cfg.mentionName) aArgs.push('--mention', cfg.mentionName)
+        const mention = cfg.ownerUid || cfg.mentionName
+        if (mention) aArgs.push('--mention', mention)
         autoComment = await runEngine('auto-comment.mjs', aArgs, 10 * 60_000)
         log('自动评论：' + autoComment.text.slice(-400))
       } else {
@@ -920,13 +928,21 @@ export function apply(ctx) {
     if (req.method === 'POST' && path === '/interact/preview') {
       const body = await readBody(req)
       const kind = ['comment', 'reply', 'dm'].includes(body.kind) ? body.kind : 'comment'
+      const cfg = loadCfg()
       let text = String(body.text || '').trim()
       let model = ''
       let logText = ''
+      if (!text && body.owner && kind === 'reply') {
+        const direct = answerOwnerCommand(body.message || '', cfg)
+        if (direct) return sendJson(res, 200, { ok: true, text: direct, model: 'owner-command', cap: null, kind })
+      }
       if (!text) {
         const ctx = kind === 'comment'
-          ? { title: body.title || '', up: body.up || '', quotes: body.quotes || [] }
-          : { message: body.message || '', replyingTo: body.replyingTo || '', video: body.video || '' }
+          ? { title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall }
+          : {
+            message: body.message || '', replyingTo: body.replyingTo || '', video: body.video || '',
+            owner: body.owner === true, ownerCall: cfg.ownerCall,
+          }
         const r = await runEngine('compose.mjs', ['--kind', kind, '--context', JSON.stringify(ctx)], 120_000)
         logText = r.text.slice(-1500)
         try {
@@ -935,7 +951,7 @@ export function apply(ctx) {
         } catch { /* 下面统一报错 */ }
         if (!text) return sendJson(res, 200, { ok: false, error: '生成失败（看日志）', log: logText })
       }
-      const cap = interact.checkCap(kind, loadCfg())
+      const cap = interact.checkCap(kind, cfg)
       return sendJson(res, 200, { ok: true, text, model, cap, kind })
     }
     if (req.method === 'POST' && path === '/interact/send') {
@@ -956,7 +972,8 @@ export function apply(ctx) {
         const bv = String(body.bv || '').trim()
         if (!BV_RE.test(bv)) return sendJson(res, 200, { ok: false, error: 'BV 号不对' })
         args.push('comment', 'post', bv, text)
-        if (cfg.mentionName) args.push('--at', cfg.mentionName)
+        const mention = cfg.ownerUid || cfg.mentionName
+        if (mention) args.push('--at', mention)
       } else if (kind === 'reply') {
         const bv = String(body.bv || '').trim()
         const rpid = String(body.rpid || '').trim()
@@ -1004,7 +1021,7 @@ export function apply(ctx) {
       const copyKeys = [
         'enabled', 'keywords', 'llmKey', 'scheduleRanges', 'perDay',
         'personaPrompt', 'reportLevel', 'favFolderId',
-        'autoComment', 'autoReply', 'mentionName', 'replyPerDay',
+        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'replyPerDay',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
         'voice', 'modelChain', 'concurrency',
         'publishEnabled', 'defaultTags', 'defaultZone',

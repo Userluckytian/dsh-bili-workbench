@@ -4,14 +4,18 @@
  *   node auto-reply.mjs --limit 5 [--dry-run]
  *
  * 规则：
- *   · 只看 feed replies 里 is_new 的条目，且 rpid 没回过（interactions.json 账本）
- *   · 不回复自己
+ *   · 只回 24 小时内的消息，且 rpid 没回过（interactions.json 账本）
+ *   · 普通用户：只回 is_new，不回答统计/配置/权限类问题
+ *   · 主人（config.ownerUid）：即使消息已被界面标记已读也会处理；可以问“今天逛了多少 / 时段”
+ *   · 主人也不能在评论里改配置、投稿、删除、私信；这类指令只回复“去工作台手动改”
+ *   · 不回复自己账号产生的普通消息；会跳过自己刚发出的回复文本，避免自问自答循环
  *   · 默认真的发；--dry-run 只打印命令
  *   · 风控/限流立刻停，不自动重发
  */
 import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
+import { ownerInfo, answerOwnerCommand, auditMessage, todayStats } from './owner.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -28,42 +32,90 @@ function selfMid() {
   } catch { return '' }
 }
 
+function ensureCall(text, call) {
+  const t = String(text || '').trim()
+  if (!t || !call || t.includes(call)) return t
+  return `${call}，${t}`.slice(0, 120)
+}
+
 async function main() {
   const dryRun = flag('dry-run')
   const limit = Math.max(1, Math.min(Number(arg('limit', 5)) || 5, 20))
   const persona = String(process.env.BILI_OP_PERSONA || '')
   const myMid = selfMid()
+  const owner = ownerInfo()
 
-  const r = runBili(['feed', 'replies', '--limit', String(Math.max(limit * 3, 20))], { timeoutMs: 45000 })
+  const r = runBili(['feed', 'replies', '--limit', String(Math.max(limit * 4, 30))], { timeoutMs: 45000 })
   if (!r.ok) { log('拉回复失败：' + (r.error?.message || r.error?.code || '')); return }
   const items = (r.data?.items || [])
   const db = interact.load()
+  const botTexts = new Set(Object.values(db.replied || {}).map((x) => String(x?.text || '').trim()).filter(Boolean))
+
+  const isOwner = (m) => Boolean(owner.uid && m.user?.mid && String(m.user.mid) === owner.uid)
+  const isSelf = (m) => Boolean(myMid && m.user?.mid && String(m.user.mid) === myMid)
+  const recent = (m) => {
+    const t = Date.parse(m?.time || '')
+    return Number.isFinite(t) && Date.now() - t < 24 * 3600 * 1000
+  }
 
   const targets = items.filter((m) => {
-    if (!m?.is_new) return false
-    if (m.user?.mid && myMid && String(m.user.mid) === myMid) return false
+    if (!m?.rpid || !m.on?.bvid || !m.content) return false
     if (db.replied[String(m.rpid)]) return false
-    return Boolean(m.on?.bvid) && Boolean(m.content)
+    if (botTexts.has(String(m.content).trim())) return false
+    const own = isOwner(m)
+    if (isSelf(m) && !own) return false
+    if (!own && !m.is_new) return false
+    if (!recent(m)) return false
+    return true
   }).slice(0, limit)
 
   if (!targets.length) { log('没有需要回复的新消息'); return }
-  log(`待回复 ${targets.length} 条${dryRun ? '（dry-run）' : ''}`)
+  log(`待回复 ${targets.length} 条${dryRun ? '（dry-run）' : ''}${owner.uid ? ` · 主人 UID ${owner.uid}` : ''}`)
 
   let ok = 0, fail = 0
   for (const m of targets) {
+    const own = isOwner(m)
+    const audit = auditMessage(m.content, { isOwner: own })
     let text = ''
-    try {
-      const c = await composeText('reply', {
-        message: m.content || '',
-        replyingTo: m.replying_to || '',
-        video: m.on?.title || '',
-      }, persona)
-      text = c.text
-    } catch (e) {
-      log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
-      fail++
-      continue
+
+    if (!audit.allow) {
+      if (own && audit.reason === 'owner-dangerous') {
+        text = `${owner.call}，这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。`
+      } else {
+        log(`  ⏭  ${m.rpid} 跳过（${audit.reason}）`)
+        continue
+      }
+    } else if (own) {
+      const direct = answerOwnerCommand(m.content)
+      if (direct) {
+        text = direct
+      } else {
+        try {
+          const s = todayStats()
+          const stats = `今天已逛 ${s.todayVideos} 条，目标 ${s.target} 条；评论 ${s.comments} 条，回复 ${s.replies} 条；时段 ${s.ranges}，每天上限 ${s.perDay} 条`
+          const c = await composeText('owner', { message: m.content || '', stats, ownerCall: owner.call }, persona)
+          text = ensureCall(c.text, owner.call)
+        } catch (e) {
+          log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
+          fail++
+          continue
+        }
+      }
+    } else {
+      try {
+        const c = await composeText('reply', {
+          message: m.content || '',
+          replyingTo: m.replying_to || '',
+          video: m.on?.title || '',
+        }, persona)
+        text = c.text
+      } catch (e) {
+        log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
+        fail++
+        continue
+      }
     }
+
     if (!text) { log(`  ✗ ${m.rpid} 生成为空`); fail++; continue }
 
     const args = []
@@ -74,7 +126,7 @@ async function main() {
     if (res.ok) {
       if (!dryRun) interact.markReply(m.rpid, { text })
       ok++
-      log(`  ✓ ${m.rpid} ${dryRun ? 'dry-run' : '已回复'}：${text}`)
+      log(`  ✓ ${m.rpid} ${dryRun ? 'dry-run' : '已回复'}${own ? '（主人）' : ''}：${text}`)
     } else {
       fail++
       const msg = res.error?.message || res.error?.code || '未知错误'

@@ -580,15 +580,20 @@ window.__ModuleLoader__.load({
         !loading && !items.length ? h(Note, {}, key ? '没搜到，换个词' : '热门拉不到（看看 bili 是否登录）') : null)
     }
 
-    function SubInbox({ onCommented }) {
+    function SubInbox({ onCommented, cfg }) {
       const inbox = useApi('/inbox')
       const [composer, setComposer] = useState(null)
       const items = inbox.data?.items || []
       const c = inbox.data?.counts || {}
+      const ownerUid = String(cfg?.ownerUid || '')
+      const isOwner = (m) => Boolean(ownerUid && m.user?.mid && String(m.user.mid) === ownerUid)
 
       const replyTarget = (m) => ({
         kind: 'reply', label: m.user?.name || '',
-        ctx: { message: m.content || '', replyingTo: m.replying_to || '', video: m.on?.title || '' },
+        ctx: {
+          message: m.content || '', replyingTo: m.replying_to || '', video: m.on?.title || '',
+          owner: isOwner(m), ownerCall: cfg?.ownerCall || '老弟',
+        },
         ids: { bv: m.on?.bvid, rpid: m.rpid, root: m.root },
       })
       const dmTarget = (m) => ({
@@ -603,6 +608,7 @@ window.__ModuleLoader__.load({
           h(Chip, {}, `@ ${c.mentions ?? 0}`),
           h(Chip, {}, `私信 ${c.private_messages ?? 0}`),
           h(Chip, {}, `赞 ${c.likes ?? 0}`),
+          h(Chip, { ok: Boolean(cfg?.autoReply) }, `自动回复 ${cfg?.autoReply ? '开' : '关'}`),
           h('div', { 'data-wb-grow': '' }),
           h(Btn, { sm: true, onClick: inbox.reload }, '刷新')),
         h(Note, {}, '默认由 AI 写草稿；发出前一定先给你看原文，默认 dry-run。'),
@@ -618,10 +624,11 @@ window.__ModuleLoader__.load({
         ...items.map((m, i) => h('div', { key: i, 'data-wb-sec': '' },
           h('div', { 'data-wb-row': '' },
             h(Chip, {}, '回复'),
+            isOwner(m) ? h(Chip, { ok: true }, '主人') : null,
             h('b', {}, m.user?.name || '?'),
             h('span', { 'data-wb-meta': '' }, [dayOf(m.time), m.on?.bvid].filter(Boolean).join(' · ')),
             h('div', { 'data-wb-grow': '' }),
-            h(Btn, { sm: true, onClick: () => setComposer(replyTarget(m)) }, 'AI 写回复'),
+            h(Btn, { sm: true, onClick: () => setComposer(replyTarget(m)) }, isOwner(m) ? '回答主人' : 'AI 写回复'),
             m.user?.mid ? h(Btn, { sm: true, onClick: () => setComposer(dmTarget(m)) }, '私信') : null),
           h('div', { 'data-wb-why': '' }, String(m.content || '')))))
     }
@@ -655,6 +662,7 @@ window.__ModuleLoader__.load({
           llmKey: draft.llmKey,
           personaPrompt: draft.personaPrompt, reportLevel: draft.reportLevel, favFolderId: draft.favFolderId,
           autoComment: draft.autoComment, autoReply: draft.autoReply,
+          ownerUid: draft.ownerUid, ownerCall: draft.ownerCall,
           mentionName: draft.mentionName, replyPerDay: draft.replyPerDay,
           dmWatch: draft.dmWatch, dmWatchMinutes: draft.dmWatchMinutes,
           voice: draft.voice, modelChain: String(draft.modelChainText || '').split('\n').map((s) => s.trim()).filter(Boolean),
@@ -711,16 +719,22 @@ window.__ModuleLoader__.load({
               h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.favFolderId || '', onChange: (e) => set('favFolderId', e.target.value), placeholder: '收藏夹 ID / 名称（留空不收藏）' }))),
 
           h(Sec, { title: '互动 · 自动评论与回复' },
+            h(Field, { label: '主人 UID' },
+              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.ownerUid || '', onChange: (e) => set('ownerUid', e.target.value), placeholder: '例如 498295893' }),
+              h(Note, {}, '只有这个 UID 的指令会被当主人；其他人问统计/配置会被忽略')),
+            h(Field, { label: '称呼' },
+              h('input', { 'data-wb-input': '', style: { maxWidth: '120px' }, value: draft.ownerCall || '', onChange: (e) => set('ownerCall', e.target.value), placeholder: '老弟' }),
+              h(Note, {}, '评论里会自然称呼这个称呼')),
             h('label', { 'data-wb-toggle': '' },
               h('input', { type: 'checkbox', checked: Boolean(draft.autoComment), onChange: (e) => set('autoComment', e.target.checked) }),
-              h('span', {}, '自动评论并 @ 我（每条采到的视频都留一条）')),
-            h(Field, { label: '@我' },
-              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.mentionName || '', onChange: (e) => set('mentionName', e.target.value), placeholder: 'UID / 昵称，留空=自己' }),
-              h('Note', {}, '只发在评论区，不私信')),
+              h('span', {}, '自动评论并 @ 主人（每条采到的视频都留一条）')),
+            h(Field, { label: '额外 @（可选）' },
+              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.mentionName || '', onChange: (e) => set('mentionName', e.target.value), placeholder: '留空=主人 UID' }),
+              h(Note, {}, '只发在评论区，不私信')),
             h('div', { 'data-wb-row': '', style: { marginTop: '4px' } },
               h('label', { 'data-wb-toggle': '' },
                 h('input', { type: 'checkbox', checked: Boolean(draft.autoReply), onChange: (e) => set('autoReply', e.target.checked) }),
-                h('span', {}, '有人回复就自动回'))),
+                h('span', {}, '有人回复就自动回（主人指令会优先回答）'))),
             h(Field, { label: '每天最多回复' },
               h('input', { 'data-wb-input': '', 'data-num': '', type: 'number', min: 0, max: 200, value: draft.replyPerDay, onChange: (e) => set('replyPerDay', e.target.value) }),
               h('span', {}, '条（0=不限）')),
@@ -786,7 +800,7 @@ window.__ModuleLoader__.load({
             h('button', { key: k, 'data-wb-btn': '', 'data-sm': '', 'data-primary': sub === k ? '' : undefined, onClick: () => setSub(k) }, l)),
           sub === 'video' && basket.length ? h(Chip, {}, `创作篮 ${basket.length}`) : null),
         sub === 'video' ? h(SubVideo, { storeMap, cfg: cfgRes.data?.config, onCommented: store.reload, onKeywordsChanged: cfgRes.reload }) : null,
-        sub === 'msg' ? h(SubInbox, { onCommented: store.reload }) : null,
+        sub === 'msg' ? h(SubInbox, { onCommented: store.reload, cfg: cfgRes.data?.config }) : null,
         sub === 'set' ? h(SubSettings, { onRunRound: () => store.reload(), onSaved: cfgRes.reload }) : null)
     }
 
