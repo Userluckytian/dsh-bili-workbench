@@ -18,9 +18,8 @@ export const currentModel = () => MODELS[((modelIdx % MODELS.length) + MODELS.le
 export function assertKey() {
   if (!KEY) {
     throw new Error(
-      '没有模型密钥。设置环境变量 OC_API_KEY（我们自己的 40080 端点），例如：\n' +
-      '  $env:OC_API_KEY="..."   # 只在当前终端生效\n' +
-      '或者写进 bili-op/config.json 的 llmKey 字段（该文件不进 git）。',
+      '没有模型密钥。设置环境变量 OC_API_KEY，或在工作台「刷B站 → 刷B站设置」里填模型密钥（存到 bili-store/config.json 的 llmKey）。例如：\n' +
+      '  $env:OC_API_KEY="..."   # 只在当前终端生效',
     )
   }
 }
