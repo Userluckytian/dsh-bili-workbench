@@ -994,6 +994,28 @@ export function apply(ctx) {
       res.writeHead(200, { 'content-type': type, 'content-length': st.size, 'accept-ranges': 'bytes', 'cache-control': 'no-store' })
       return createReadStream(file).pipe(res)
     }
+    if (req.method === 'POST' && path === '/review/delete') {
+      const body = await readBody(req)
+      const runId = String(body.runId || '')
+      const st = renders.readStatus(runId)
+      if (!st) return sendJson(res, 200, { ok: false, error: '成片不存在' })
+      const live = jobs.get(runId)
+      if (live?.stage === 'running') return sendJson(res, 200, { ok: false, error: '正在渲染，等渲染完再删' })
+      const ok = renders.deleteRun(runId)
+      if (!ok) return sendJson(res, 200, { ok: false, error: '删除失败（文件不在素材库目录）' })
+      if (st.projectId) {
+        const p = plans.getProject(st.projectId)
+        const curRun = p?.runDir ? String(p.runDir).split(/[\\/]/).filter(Boolean).pop() : ''
+        if (p && curRun === runId) {
+          p.stage = 'draft'
+          p.runDir = ''
+          p.review = null
+          plans.saveProject(p)
+        }
+      }
+      log(`删除成片 ${runId}（只删本地，不动 B站 已发布内容）`)
+      return sendJson(res, 200, { ok: true })
+    }
     if (req.method === 'POST' && path === '/review/decision') {
       const body = await readBody(req)
       const runId = String(body.runId || '')

@@ -1058,6 +1058,9 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [dump, setDump] = useState('')
       const [preview, setPreview] = useState('')
+      const [delArm, setDelArm] = useState('')
+      const delTimer = useRef(null)
+      useEffect(() => () => clearTimeout(delTimer.current), [])
       const runs = list.data?.runs || []
       const publishEnabled = Boolean(list.data?.publishEnabled)
       usePoll(list.reload, 5000, true)
@@ -1085,11 +1088,30 @@ window.__ModuleLoader__.load({
         setBusy('')
         setDump(r.ok ? JSON.stringify(r.data || {}, null, 2).slice(0, 3000) : ('失败：' + (errText(r) || '')))
       }
+      const remove = async (run) => {
+        if (busy === run.runId + 'del') return
+        if (delArm !== run.runId) {
+          setDelArm(run.runId)
+          clearTimeout(delTimer.current)
+          delTimer.current = setTimeout(() => setDelArm(''), 4000)
+          return
+        }
+        clearTimeout(delTimer.current)
+        setDelArm('')
+        setBusy(run.runId + 'del')
+        const r = await jpost('/review/delete', { runId: run.runId })
+        setBusy('')
+        setDump(r.ok
+          ? `已删除本地成片：${run.runId}\n（B站已发布的内容不受影响）`
+          : ('失败：' + (errText(r) || '')))
+        list.reload()
+      }
       return h('div', { 'data-wb-page': '' },
         h(PageHead, { title: '审核 / 发布', sub: '成片必须你点通过才会发布；投稿前先 dry-run 看全文' },
           h('span', { 'data-wb-chip': '', 'data-ok': publishEnabled ? '' : undefined }, publishEnabled ? '真投稿已允许' : '真投稿未开启'),
           h(Btn, { sm: true, onClick: list.reload }, '刷新')),
         h(Err, {}, list.err),
+        h(Note, {}, '「删除成片」只清本地文件，不会删除 B站 上已发布的内容；删除后项目回到草稿，可以重新渲染。'),
         dump ? h('pre', { 'data-wb-pre': '' }, dump) : null,
         list.loading ? h('div', { 'data-wb-loading': '' }, '读成片…') : null,
         !list.loading && !runs.length ? h(Note, {}, '还没有成片 —— 去「创作/出片」渲染一期') : null,
@@ -1111,7 +1133,11 @@ window.__ModuleLoader__.load({
                   : h(Btn, { sm: true, primary: true, disabled: busy === r.runId + 'approved', onClick: () => decide(r.runId, 'approved') }, '通过'),
                 published ? null : h(Btn, { sm: true, disabled: busy === r.runId + 'rejected', onClick: () => decide(r.runId, 'rejected') }, '打回重做'),
                 h('div', { 'data-wb-grow': '' }),
-                h(Btn, { sm: true, disabled: !r.hasVideo, onClick: () => setPreview(`/api/bili-wb/review/media?runId=${encodeURIComponent(r.runId)}&kind=video`) }, '预览')),
+                h(Btn, { sm: true, disabled: !r.hasVideo, onClick: () => setPreview(`/api/bili-wb/review/media?runId=${encodeURIComponent(r.runId)}&kind=video`) }, '预览'),
+                h(Btn, {
+                  sm: true, disabled: Boolean(busy), onClick: () => remove(r),
+                  style: delArm === r.runId ? { color: '#f87171', borderColor: 'rgba(248,113,113,.5)' } : undefined,
+                }, busy === r.runId + 'del' ? '删除中…' : delArm === r.runId ? '确认删除？' : '删除成片')),
               h('div', { 'data-wb-row': '' },
                 h(Btn, { sm: true, disabled: busy === r.runId + 'dry' || !r.hasVideo, onClick: () => upload(r, true) }, '投稿 dry-run'),
                 r.stage === 'approved'

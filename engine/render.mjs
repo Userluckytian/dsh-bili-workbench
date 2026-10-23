@@ -7,7 +7,7 @@
  *   · 渲染本身仍走 bili-op/build.mjs（配音→Remotion→合音轨→烧字幕→封面），不重复造轮子
  *   · 进度从子进程日志里推（阶段权重），前端轮询 /render/status
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, cpSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, cpSync, rmSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { paths as storePaths, STORE } from './store.mjs'
@@ -235,4 +235,15 @@ export function mediaPath(runId, kind) {
     return existsSync(subbed) ? subbed : join(dir, 'final.mp4')
   }
   return ''
+}
+
+/** 删除本地成片：只动素材库 renders/ 或旧 bili-op/runs，不会碰 B站 已发布内容 */
+export function deleteRun(runId) {
+  const dir = findRunDir(runId)
+  if (!dir) return false
+  const norm = dir.replace(/\//g, '\\').toLowerCase()
+  if (!norm.includes('\\renders\\') && !norm.includes('\\runs\\')) return false
+  rmSync(dir, { recursive: true, force: true })
+  try { rmSync(join(PUBLIC_PLANS, runId), { recursive: true, force: true }) } catch { /* 可选清理 */ }
+  return true
 }

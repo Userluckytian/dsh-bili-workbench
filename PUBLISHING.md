@@ -73,9 +73,9 @@ dsh plugin --profile web add dsh-bili-workbench
 ## 6. 可选：打 tag / release
 
 ```bash
-git tag v0.4.3
-git push origin v0.4.3
-gh release create v0.4.3 --generate-notes
+git tag v0.4.4
+git push origin v0.4.4
+gh release create v0.4.4 --generate-notes
 ```
 
 GitHub 直接安装不依赖 release，但 release 页面方便别人看更新说明。
