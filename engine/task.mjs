@@ -224,7 +224,8 @@ async function runTask(task, { checkOnly = false } = {}) {
   if (found.length >= task.needed) {
     tasks.update(id, { status: 'planning' })
     tasks.addLog(id, `素材够了（${found.length} 条），开始写方案`)
-    const r = writePlan(task, found)
+    let r
+    try { r = writePlan(task, found) } catch (e) { r = { ok: false, error: String(e?.message ?? e) } }
     if (r.ok) {
       tasks.update(id, {
         status: 'ready', projectId: r.project.id, planTitle: r.plan.title || r.project.title,
