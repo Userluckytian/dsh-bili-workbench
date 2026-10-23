@@ -14,7 +14,9 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { list, STORE, paths } from './store.mjs'
-import { chatJSON, assertKey } from '../../bili-op/llm.mjs'
+import { loadLLM } from './llmpath.mjs'
+
+const { chatJSON, assertKey } = await loadLLM()
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)

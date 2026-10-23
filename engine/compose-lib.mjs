@@ -2,7 +2,9 @@
  * compose-lib.mjs —— 评论 / 回复 / 私信草稿的共用生成逻辑
  * （compose.mjs 是它的命令行外壳；自动评论/自动回复也直接 import 这里）
  */
-import { chat, assertKey } from '../../bili-op/llm.mjs'
+import { loadLLM } from './llmpath.mjs'
+
+const { chat, assertKey } = await loadLLM()
 
 export const LIMITS = { comment: 40, reply: 40, dm: 120 }
 

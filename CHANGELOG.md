@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-23
+
+- 修复远程安装后 `judge / plan / compose` 仍按本地目录结构 import `../../bili-op/llm.mjs`、导致 `ERR_MODULE_NOT_FOUND` 的问题
+- 新增 `engine/llmpath.mjs`：自动识别“源码同层 bili-op”和“插件内置 bili-op”两种布局
+
 ## 0.3.0 — 2026-10-23
 
 - 「我的」页支持自定义素材库位置：默认 `~/.dsh-bili-workbench/store`，切换时新目录为空会自动复制现有素材，已有数据则直接切换
