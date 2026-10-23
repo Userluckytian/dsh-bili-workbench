@@ -172,6 +172,7 @@ node scripts/doctor.mjs
   frames/<BV>/          关键帧
   covers/<BV>.jpg       封面
   plans/<项目>/          方案与版本
+  renders/<runId>/      成片、封面、字幕、配音（升级插件不会丢）
   reports/YYYY-MM-DD.md 素材日报
   config.json           设置（含模型密钥，注意不要提交）
   interactions.json     已评论 / 已回复账本
@@ -219,6 +220,9 @@ scripts/doctor.mjs       环境自检
 
 **渲染时报找不到浏览器？**
 装 Chrome 或 Edge；也可以用 `BILI_OP_CHROME` 指定路径。Linux/macOS 下请把 `bili-op/render/src/News.tsx` 和 `bili-op/cover.mjs` 里的字体改成系统有的字体。
+
+**渲染完成后「预览成片」还是灰的？**
+先确认成片文件存在：`<素材库>/renders/<runId>/final-subbed.mp4`。旧版本把成片放在插件的 `bili-op/runs`，升级重装会清掉；0.4.2 起已改到素材库目录，并会自动迁移旧成片。如果项目显示「已完成」但文件确实不存在，重启 dsh 后会自动改回草稿，重新渲染即可。
 
 **ffmpeg 烧字幕失败？**
 需要带 `libass` 的 ffmpeg：`ffmpeg -filters | grep subtitles`。

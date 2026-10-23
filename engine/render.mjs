@@ -7,18 +7,42 @@
  *   · 渲染本身仍走 bili-op/build.mjs（配音→Remotion→合音轨→烧字幕→封面），不重复造轮子
  *   · 进度从子进程日志里推（阶段权重），前端轮询 /render/status
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, cpSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { paths as storePaths } from './store.mjs'
+import { paths as storePaths, STORE } from './store.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BILI_OP_BUNDLED = join(HERE, '..', 'bili-op')
 const BILI_OP_SIBLING = join(HERE, '..', '..', 'bili-op')
 export const BILI_OP = process.env.BILI_OP_DIR
   || (existsSync(join(BILI_OP_BUNDLED, 'build.mjs')) ? BILI_OP_BUNDLED : BILI_OP_SIBLING)
-export const RUNS = join(BILI_OP, 'runs')
+// 成片必须跟着素材库走：插件升级会重装 node_modules，放在 bili-op/runs 会被清掉
+export const RUNS = process.env.BILI_OP_RUNS || join(STORE, 'renders')
+const LEGACY_RUNS = join(BILI_OP, 'runs')
 const PUBLIC_PLANS = join(BILI_OP, 'render', 'public', 'plans')
+
+/** 新目录优先；老版本留在 bili-op/runs 的成片继续可读 */
+export function findRunDir(runId) {
+  for (const d of [join(RUNS, runId), join(LEGACY_RUNS, runId)]) {
+    if (existsSync(d)) return d
+  }
+  return ''
+}
+
+/** 插件内置布局的旧成片迁到素材库，避免下次升级再被清掉 */
+export function migrateLegacyRuns() {
+  if (BILI_OP !== BILI_OP_BUNDLED || !existsSync(LEGACY_RUNS)) return 0
+  mkdirSync(RUNS, { recursive: true })
+  let n = 0
+  for (const name of readdirSync(LEGACY_RUNS)) {
+    const src = join(LEGACY_RUNS, name)
+    const dst = join(RUNS, name)
+    if (existsSync(dst)) continue
+    try { cpSync(src, dst, { recursive: true }); n++ } catch { /* 单个失败不影响其它 */ }
+  }
+  return n
+}
 
 const readJson = (f, dflt = null) => {
   try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return dflt }
@@ -52,7 +76,7 @@ export function prepareRun(proj, plan, version) {
   const v = Number(version) || Number(proj.currentVersion) || 1
   const base = `${today()}-${slug(plan.title)}-v${v}`
   let runId = base
-  for (let n = 2; existsSync(join(RUNS, runId)); n++) runId = `${base}-${n}`
+  for (let n = 2; findRunDir(runId); n++) runId = `${base}-${n}`
   const runDir = join(RUNS, runId)
   mkdirSync(runDir, { recursive: true })
 
@@ -127,8 +151,8 @@ export function prepareRun(proj, plan, version) {
 
 /** 读一个 run 的 status.json（兼容只有 script.json 的旧 run） */
 export function readStatus(runId) {
-  const dir = join(RUNS, runId)
-  if (!existsSync(dir)) return null
+  const dir = findRunDir(runId)
+  if (!dir) return null
   const st = readJson(join(dir, 'status.json'), null)
   if (st) return st
   const sc = readJson(join(dir, 'script.json'), null)
@@ -137,33 +161,45 @@ export function readStatus(runId) {
 }
 
 export function listRuns() {
-  if (!existsSync(RUNS)) return []
   const out = []
-  for (const name of readdirSync(RUNS)) {
-    const dir = join(RUNS, name)
-    let isDir = false
-    try { isDir = statSync(dir).isDirectory() } catch { isDir = false }
-    if (!isDir) continue
-    const st = readStatus(name)
-    if (!st) continue
-    const cover = join(dir, 'cover.png')
-    const video = join(dir, 'final-subbed.mp4')
-    const videoPlain = join(dir, 'final.mp4')
-    out.push({
-      runId: name,
-      ...st,
-      hasCover: existsSync(cover),
-      hasVideo: existsSync(video) || existsSync(videoPlain),
-      videoFile: existsSync(video) ? 'final-subbed.mp4' : (existsSync(videoPlain) ? 'final.mp4' : ''),
-      updatedAt: st.builtAt || st.createdAt || '',
-    })
+  const seen = new Set()
+  for (const root of [RUNS, LEGACY_RUNS]) {
+    if (!existsSync(root)) continue
+    for (const name of readdirSync(root)) {
+      if (seen.has(name)) continue
+      const dir = join(root, name)
+      let isDir = false
+      try { isDir = statSync(dir).isDirectory() } catch { isDir = false }
+      if (!isDir) continue
+      const st = readStatus(name)
+      if (!st) continue
+      seen.add(name)
+      const realDir = findRunDir(name) || dir
+      const cover = join(realDir, 'cover.png')
+      const video = join(realDir, 'final-subbed.mp4')
+      const videoPlain = join(realDir, 'final.mp4')
+      out.push({
+        runId: name,
+        ...st,
+        hasCover: existsSync(cover),
+        hasVideo: existsSync(video) || existsSync(videoPlain),
+        videoFile: existsSync(video) ? 'final-subbed.mp4' : (existsSync(videoPlain) ? 'final.mp4' : ''),
+        updatedAt: st.builtAt || st.createdAt || '',
+      })
+    }
   }
   out.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   return out
 }
 
+const statusFile = (runId) => {
+  const dir = findRunDir(runId) || join(RUNS, runId)
+  mkdirSync(dir, { recursive: true })
+  return join(dir, 'status.json')
+}
+
 export function setStage(runId, stage, patch = {}) {
-  const f = join(RUNS, runId, 'status.json')
+  const f = statusFile(runId)
   const st = readJson(f, {}) || {}
   const next = { ...st, ...patch, stage }
   writeJson(f, next)
@@ -171,7 +207,7 @@ export function setStage(runId, stage, patch = {}) {
 }
 
 export function setReview(runId, state, note = '') {
-  const f = join(RUNS, runId, 'status.json')
+  const f = statusFile(runId)
   const st = readJson(f, {}) || {}
   st.review = { state, at: new Date().toISOString(), note: String(note || '').slice(0, 300) }
   if (state === 'approved') st.stage = 'approved'
@@ -181,7 +217,7 @@ export function setReview(runId, state, note = '') {
 }
 
 export function markPublished(runId, { bvid = '', title = '' } = {}) {
-  const f = join(RUNS, runId, 'status.json')
+  const f = statusFile(runId)
   const st = readJson(f, {}) || {}
   st.review = { ...(st.review || {}), state: 'published', at: new Date().toISOString(), bvid, title }
   st.stage = 'published'
@@ -191,7 +227,8 @@ export function markPublished(runId, { bvid = '', title = '' } = {}) {
 }
 
 export function mediaPath(runId, kind) {
-  const dir = join(RUNS, runId)
+  const dir = findRunDir(runId)
+  if (!dir) return ''
   if (kind === 'cover') return join(dir, 'cover.png')
   if (kind === 'video') {
     const subbed = join(dir, 'final-subbed.mp4')

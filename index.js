@@ -408,6 +408,13 @@ function pctFromLine(line, job) {
     return Math.min(44, 14 + Math.round((n / Math.max(1, job.totalShots || 8)) * 30))
   }
   if (/③\s*渲染画面/.test(line)) return 48
+  // Remotion 用 \r 刷进度；有百分比或 已渲/总数 时映射到 48–73%
+  if (/render|frame|encoded/i.test(line)) {
+    const pct = /(\d{1,3})\s*%/.exec(line)
+    if (pct) return Math.min(73, 48 + Math.round((Number(pct[1]) / 100) * 25))
+    const frac = /(\d+)\s*\/\s*(\d+)/.exec(line)
+    if (frac) return Math.min(73, 48 + Math.round((Number(frac[1]) / Math.max(1, Number(frac[2]))) * 25))
+  }
   if (/渲染耗时/.test(line)) return 74
   if (/④\s*合入旁白/.test(line)) return 82
   if (/⑤\s*烧字幕/.test(line)) return 89
@@ -446,7 +453,7 @@ function startRender(project, plan, version, voice) {
   let buf = ''
   const onData = (b) => {
     buf += b.toString('utf8')
-    const lines = buf.split(/\r?\n/)
+    const lines = buf.split(/[\r\n]+/)
     buf = lines.pop() || ''
     for (const line of lines) {
       job.log = (job.log + line + '\n').slice(-12000)
@@ -1280,14 +1287,24 @@ export function apply(ctx) {
 
   /* ── 重启恢复：上次渲染到一半被重启，项目别永远卡在「渲染中」 ── */
   try {
+    // 老版本成片在 bili-op/runs（插件目录里，升级会被清）；先迁到素材库 renders/
+    const moved = renders.migrateLegacyRuns()
+    if (moved) log(`已迁移 ${moved} 个旧成片到素材库 renders/`)
     for (const p of plans.listProjects()) {
-      if (p.legacy || p.stage !== 'rendering') continue
-      const runId = p.runDir ? String(p.runDir).split(/[\\/]/).filter(Boolean).pop() : ''
-      const st = runId ? renders.readStatus(runId) : null
-      if (st?.stage === 'rendered' || st?.stage === 'approved' || st?.stage === 'published') p.stage = st.stage
-      else p.stage = 'draft'
-      plans.saveProject(p)
-      log(`恢复项目 ${p.id} 状态 → ${p.stage}`)
+      if (p.legacy) continue
+      if (p.stage === 'rendering') {
+        const runId = p.runDir ? String(p.runDir).split(/[\\/]/).filter(Boolean).pop() : ''
+        const st = runId ? renders.readStatus(runId) : null
+        if (st?.stage === 'rendered' || st?.stage === 'approved' || st?.stage === 'published') p.stage = st.stage
+        else p.stage = 'draft'
+        plans.saveProject(p)
+        log(`恢复项目 ${p.id} 状态 → ${p.stage}`)
+      } else if (p.stage === 'rendered' && (!p.runDir || !existsSync(p.runDir))) {
+        p.stage = 'draft'
+        p.runDir = ''
+        plans.saveProject(p)
+        log(`项目 ${p.id} 的成片文件已不存在，状态改回草稿`)
+      }
     }
   } catch (e) { log('项目状态恢复失败：' + (e?.message ?? e)) }
 
