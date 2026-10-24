@@ -55,10 +55,69 @@
   }
   .copy:hover{color:var(--text)}
 
-  /* screenshot */
-  .shots{margin:30px auto 10px;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-  @media(max-width:768px){.shots{grid-template-columns:1fr}}
-  .shots img{width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(255,255,255,.1);box-shadow:0 8px 32px rgba(0,0,0,.3)}
+  /* carousel */
+  .carousel{position:relative;margin:26px 0 10px}
+  .carousel-track{
+    display:flex;overflow-x:auto;scroll-snap-type:x mandatory;
+    border-radius:16px;scrollbar-width:none
+  }
+  .carousel-track::-webkit-scrollbar{display:none}
+  .carousel-slide{
+    min-width:100%;scroll-snap-align:center;
+    min-height:520px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;padding:28px 22px;
+    background:var(--card);border:1px solid var(--border);border-radius:16px
+  }
+  @media(max-width:600px){.carousel-slide{min-height:420px;padding:18px 12px}}
+  .carousel-slide img{
+    width:100%;max-height:380px;object-fit:cover;display:block;
+    border-radius:12px;border:1px solid rgba(255,255,255,.1);
+    box-shadow:0 8px 32px rgba(0,0,0,.3)
+  }
+  .slide-content{text-align:center;max-width:680px;margin-top:20px}
+  .carousel-slide.active .slide-content{animation:fadeInUp .5s ease}
+  @keyframes fadeInUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .slide-content h3{font-size:32px;font-weight:800;margin-bottom:8px}
+  @media(max-width:600px){.slide-content h3{font-size:26px}}
+  .slide-content p{color:var(--muted);font-size:16px}
+  .slide-tags{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:14px}
+  .slide-tags span{
+    font-size:12px;background:rgba(91,140,255,.15);color:#8ab4ff;
+    padding:4px 12px;border-radius:99px;white-space:nowrap
+  }
+  .slide-visual{
+    width:100%;display:flex;align-items:center;justify-content:center;
+    max-height:380px;border-radius:12px;position:relative;overflow:hidden
+  }
+  .slide-visual::before{
+    content:"";position:absolute;inset:0;
+    background:radial-gradient(circle at 30% 30%, rgba(255,255,255,.1), transparent 50%)
+  }
+  .grad-card-1{background:linear-gradient(135deg,#5B8CFF,#A78BFA)}
+  .grad-card-2{background:linear-gradient(135deg,#34D399,#5B8CFF)}
+  .grad-card-3{background:linear-gradient(135deg,#A78BFA,#F472B6)}
+  .grad-card-1 .slide-content,.grad-card-2 .slide-content,.grad-card-3 .slide-content{margin-top:0}
+  .grad-card-1 .slide-content h3,.grad-card-2 .slide-content h3,.grad-card-3 .slide-content h3{color:#fff}
+  .grad-card-1 .slide-content p,.grad-card-2 .slide-content p,.grad-card-3 .slide-content p{color:rgba(255,255,255,.88)}
+  .grad-card-1 .slide-tags span,.grad-card-2 .slide-tags span,.grad-card-3 .slide-tags span{
+    background:rgba(255,255,255,.18);color:#fff
+  }
+  .slide-emoji{font-size:80px;line-height:1;position:relative}
+  .carousel-nav{
+    position:absolute;top:44%;transform:translateY(-50%);z-index:2;
+    width:42px;height:42px;border-radius:50%;border:1px solid rgba(255,255,255,.2);
+    background:rgba(13,20,36,.55);color:#fff;font-size:20px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;opacity:.55;transition:opacity .2s
+  }
+  .carousel-nav:hover{opacity:1}
+  .carousel-prev{left:10px}
+  .carousel-next{right:10px}
+  .carousel-dots{display:flex;gap:9px;justify-content:center;margin-top:16px}
+  .dot{
+    width:10px;height:10px;border-radius:50%;border:none;cursor:pointer;
+    background:var(--border);transition:background .2s,transform .2s;padding:0
+  }
+  .dot.active{background:var(--accent1);transform:scale(1.25)}
 
   /* sections */
   section{padding:44px 0}
@@ -130,47 +189,65 @@
       <code id="cmd">dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench</code>
       <button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('cmd').textContent)">复制</button>
     </div>
-    <div class="shots">
-      <img src="screenshot-store.png" alt="素材库（六栏中枢）">
-      <img src="screenshot-create.png" alt="创作出片">
-      <img src="screenshot-mine.png" alt="我的与记忆">
-    </div>
   </header>
 
   <section>
     <h2>功能一览</h2>
     <p class="sub">不是又一个「B站信息流面板」，而是一条从<b>看</b>到<b>做</b>再到<b>发</b>的完整流水线。</p>
-    <div class="grid">
-      <div class="card">
-        <div class="icon">📚</div>
-        <h3>素材库（六栏中枢）</h3>
-        <p>视频元数据、逐字稿（带时间戳）、关键帧、封面、AI 点评、可引用金句，外加热评 / 弹幕 / 热梗。按 BV 幂等，7 天内不重复抓——同一条视频只采一次。</p>
+    <div class="carousel" id="carousel">
+      <button class="carousel-nav carousel-prev" aria-label="上一张">&#10094;</button>
+      <button class="carousel-nav carousel-next" aria-label="下一张">&#10095;</button>
+      <div class="carousel-track">
+        <div class="carousel-slide">
+          <img src="screenshot-store.png" alt="素材库（六栏中枢）">
+          <div class="slide-content">
+            <h3>📚 素材库 · 六栏中枢</h3>
+            <p>视频元数据、逐字稿（带时间戳）、关键帧、封面、AI 点评、可引用金句，外加热评 / 弹幕 / 热梗。按 BV 幂等，7 天内不重复抓。</p>
+            <div class="slide-tags"><span>视频索引</span><span>音色试听</span><span>片段预览</span><span>表情包</span><span>BGM</span><span>贴纸</span></div>
+          </div>
+        </div>
+        <div class="carousel-slide">
+          <img src="screenshot-create.png" alt="创作出片">
+          <div class="slide-content">
+            <h3>✍️ 创作 · 出片</h3>
+            <p>一句话出方案 → 改一版（v1/v2…）→ 真实帧 + Edge-TTS 配音 + Remotion 渲染 1080p 成片与封面。</p>
+            <div class="slide-tags"><span>转场动效</span><span>音效轨</span><span>BGM 自动选曲</span><span>动画形象</span><span>真视频拼接</span></div>
+          </div>
+        </div>
+        <div class="carousel-slide">
+          <img src="screenshot-mine.png" alt="记忆系统">
+          <div class="slide-content">
+            <h3>🧠 记忆系统</h3>
+            <p>刷到的视频沉淀为素材记忆，日报与判定结论长期留存，出片引擎从记忆库里取真实帧和金句，越用越懂你的频道。</p>
+            <div class="slide-tags"><span>三层记忆</span><span>自动复盘</span><span>经历召回</span><span>注入防护</span></div>
+          </div>
+        </div>
+        <div class="carousel-slide">
+          <div class="slide-visual grad-card-1"><span class="slide-emoji">✅</span></div>
+          <div class="slide-content">
+            <h3>✅ 审核 · 发布</h3>
+            <p>待审列表、通过 / 打回、预览成片、投稿 dry-run。真投稿默认关；打开后仍需二次确认，删成片也要确认。</p>
+            <div class="slide-tags"><span>三重闸门</span><span>AI 声明</span><span>预演投稿</span></div>
+          </div>
+        </div>
+        <div class="carousel-slide">
+          <div class="slide-visual grad-card-2"><span class="slide-emoji">💬</span></div>
+          <div class="slide-content">
+            <h3>💬 自动互动</h3>
+            <p>每条采到的视频自动留一条评论并 @ 你；有人回复就自动回。12 秒发送间隔 + 每日上限，主人身份与只读指令，默认关。</p>
+            <div class="slide-tags"><span>自动评论</span><span>带图评论</span><span>主人 @ 任务</span><span>礼貌拒绝</span></div>
+          </div>
+        </div>
+        <div class="carousel-slide">
+          <div class="slide-visual grad-card-3"><span class="slide-emoji">🔧</span></div>
+          <div class="slide-content">
+            <h3>🔧 环境自检</h3>
+            <p>一键检查 Node / ffmpeg / yt-dlp / bili CLI / 素材目录，缺什么引导装什么，开箱前心里有数。</p>
+            <div class="slide-tags"><span>一键 doctor</span><span>依赖检测</span><span>缺失引导</span></div>
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <div class="icon">🎬</div>
-        <h3>刷B站</h3>
-        <p>综合热门 / 关键词搜索 / 看懂视频。按多时段 + 每日上限自动采集，每条采完自动判定、抽句、抓热评弹幕热梗、刷新日报。</p>
-      </div>
-      <div class="card">
-        <div class="icon">✍️</div>
-        <h3>创作出片</h3>
-        <p>转场 · 音效 · BGM · 字幕样式 · 动画形象 · 真实片段 · 小剧场。一句话出方案 → 改一版（v1/v2…）→ 真实帧 + Edge-TTS 配音 + Remotion 渲染 1080p 成片与封面。</p>
-      </div>
-      <div class="card">
-        <div class="icon">✅</div>
-        <h3>审核发布（三重闸门）</h3>
-        <p>待审列表、通过 / 打回、预览成片、投稿 dry-run。真投稿默认关；打开后仍需二次确认，删成片也要确认。</p>
-      </div>
-      <div class="card">
-        <div class="icon">🧠</div>
-        <h3>记忆系统（三层）</h3>
-        <p>刷到的视频沉淀为素材记忆，日报与判定结论长期留存，出片引擎从记忆库里取真实帧和金句，越用越懂你的频道。</p>
-      </div>
-      <div class="card">
-        <div class="icon">💬</div>
-        <h3>带图评论</h3>
-        <p>可选：每条采到的视频自动留一条评论并 @ 你；有人回复就自动回。主人身份与只读指令、12 秒发送间隔 + 每日上限，默认关。</p>
-      </div>
+      <div class="carousel-dots"></div>
     </div>
   </section>
 
@@ -245,5 +322,48 @@
   </footer>
 
 </div>
+<script>
+(function(){
+  var carousel = document.getElementById('carousel');
+  var track = carousel.querySelector('.carousel-track');
+  var slides = track.querySelectorAll('.carousel-slide');
+  var dotsWrap = carousel.querySelector('.carousel-dots');
+  var current = 0, timer = null;
+
+  slides.forEach(function(_, i){
+    var d = document.createElement('button');
+    d.className = 'dot' + (i === 0 ? ' active' : '');
+    d.setAttribute('aria-label', '第' + (i + 1) + '张');
+    d.addEventListener('click', function(){ go(i); });
+    dotsWrap.appendChild(d);
+  });
+  var dots = dotsWrap.querySelectorAll('.dot');
+
+  function setActive(i){
+    slides.forEach(function(s, k){ s.classList.toggle('active', k === i); });
+    dots.forEach(function(d, k){ d.classList.toggle('active', k === i); });
+  }
+  function go(i){
+    current = (i + slides.length) % slides.length;
+    track.scrollTo({ left: current * track.clientWidth, behavior: 'smooth' });
+    setActive(current);
+  }
+  function start(){ stop(); timer = setInterval(function(){ go(current + 1); }, 4000); }
+  function stop(){ if (timer) { clearInterval(timer); timer = null; } }
+
+  carousel.querySelector('.carousel-prev').addEventListener('click', function(){ go(current - 1); start(); });
+  carousel.querySelector('.carousel-next').addEventListener('click', function(){ go(current + 1); start(); });
+  carousel.addEventListener('mouseenter', stop);
+  carousel.addEventListener('mouseleave', start);
+
+  // keep slide position correct on resize
+  window.addEventListener('resize', function(){
+    track.scrollTo({ left: current * track.clientWidth });
+  });
+
+  setActive(0);
+  start();
+})();
+</script>
 </body>
 </html>
