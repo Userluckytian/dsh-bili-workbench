@@ -31,6 +31,7 @@ const dur = Number(argVal('dur') ?? 15)
 if (!bv || !Number.isFinite(at) || at < 0 || !Number.isFinite(dur) || dur <= 0) {
   die('用法：node clip.mjs --bv BV1xxxx --at <秒> [--dur 15]')
 }
+if (!/^BV[0-9A-Za-z]{10}$/.test(bv)) die('BV 号格式不对：' + bv)
 
 // ---- 1. 拿标题和 UP 名 ----
 const info = runBili(['video', 'info', bv])

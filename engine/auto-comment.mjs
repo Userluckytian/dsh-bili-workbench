@@ -16,6 +16,9 @@ import { composeText } from './compose-lib.mjs'
 import { ownerInfo, mentionTargets, callNames } from './owner.mjs'
 import * as canon from './canon.mjs'
 import { addEvent, renderRecallBlock } from './memory.mjs'
+import { readFileSync, existsSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -64,6 +67,24 @@ async function main() {
   const calls = callNames()
   const persona = String(process.env.BILI_OP_PERSONA || '')
 
+  /** 表情包库：assets-src/memes/bili-emotes（不存在就返回空，功能自动关闭） */
+  function memePool() {
+    try {
+      // index.json 在 bili-emotes/ 下，但 file 字段带 "bili-emotes/" 前缀，实际相对 assets-src/memes/
+      const base = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets-src', 'memes')
+      const idx = JSON.parse(readFileSync(join(base, 'bili-emotes', 'index.json'), 'utf8'))
+      return idx.filter((m) => m?.file && existsSync(join(base, m.file))).map((m) => join(base, m.file))
+    } catch { return [] }
+  }
+  /** 本轮第几条评论带图：每 every 条带 1 张（0=从不），从池里按天种子伪随机选 */
+  const imgEvery = Math.max(0, Number(arg('image-every', 5)) || 0)
+  const pool = imgEvery > 0 ? memePool() : []
+  // 跨批累计：当日已发的评论数参与取模偏移，避免每次跑批都从第 1 条带图
+  const dayBase = (() => { try { return interact.dayCounts().comments || 0 } catch { return 0 } })()
+  const pickMeme = (i) => (pool.length && imgEvery > 0 && (i + dayBase + 1) % imgEvery === 0
+    ? pool[(Number(new Date().toISOString().slice(0, 10).replaceAll('-', '')) + i) % pool.length]
+    : '')
+
   const rows = list({ limit: 2000 })
     .filter((r) => localDay(r.fetchedAt) === today() && !interact.isCommented(r.bvid) && r.title)
     .slice(0, limit)
@@ -72,7 +93,7 @@ async function main() {
   log(`待评论 ${rows.length} 条${dryRun ? '（dry-run）' : ''}${targets.length ? ` · @ ${targets.map((x) => x.target).join(', ')}` : ''}${calls.length ? ` · 称呼 ${calls.join(' / ')}` : ''}`)
 
   let ok = 0, fail = 0
-  for (const rec of rows) {
+  for (const [ri, rec] of rows.entries()) {
     const ctx = {
       title: rec.title,
       up: rec.up?.name || '',
@@ -99,6 +120,8 @@ async function main() {
     if (dryRun) args.push('--dry-run')
     args.push('comment', 'post', rec.bvid, text)
     for (const t of targets) args.push('--at', t.target)
+    const meme = pickMeme(ri)
+    if (meme) args.push('--image', meme)
     const r = runBili(args, { timeoutMs: 60000 })
     if (r.ok) {
       if (!dryRun) {
@@ -106,7 +129,7 @@ async function main() {
         addEvent('comment', { bv: rec.bvid, text: `评论了《${String(rec.title).slice(0, 30)}》：${text.slice(0, 50)}` })
       }
       ok++
-      log(`  ✓ ${rec.bvid} ${dryRun ? 'dry-run' : '已评论'}：${text}`)
+      log(`  ✓ ${rec.bvid} ${dryRun ? 'dry-run' : '已评论'}${meme ? '·带图' : ''}：${text}`)
     } else {
       fail++
       const msg = r.error?.message || r.error?.code || '未知错误'

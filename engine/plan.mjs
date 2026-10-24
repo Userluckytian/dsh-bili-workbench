@@ -23,7 +23,7 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
   return i > 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : dflt
 }
-const KINDS = new Set(['title', 'item', 'data', 'outro', 'scene'])
+const KINDS = new Set(['title', 'item', 'data', 'outro', 'scene', 'broll'])
 /* 已裁剪的视频片段索引（assets-src/clips）；插件布局没有该目录时返回空 */
 function clipIndex() {
   try {
@@ -108,7 +108,9 @@ ${reviseBlock}
     { "kind": "scene", "headline": "≤16字", "lines": [{ "who": "L" | "R", "text": "≤20字台词" }]（3–5 句）,
       "narration": "30–60字" },
     { "kind": "data", "headline": "…", "stats": [{ "label": "≤6字", "value": "≤10字" }], "narration": "…" },
-    { "kind": "outro", "headline": "…", "sub": "…", "narration": "…" }
+    { "kind": "outro", "headline": "…", "sub": "…", "narration": "…" },
+    { "kind": "broll", "headline": "≤18字", "body": "≤30字", "narration": "30-45字",
+      "footage": { "clip": "片段 file 名", "offset": 秒 } }
   ]
 }
 
@@ -117,6 +119,7 @@ ${reviseBlock}
 - shots 里每个 item 镜**尽量**带 source（bv + t），t 用索引里出现的秒数或你判断的关键时刻
 - transition 只能从列出的 6 个里选，相邻镜头不要重复；effect 是这一镜的持续动效（有素材画面的镜头优先 kenburns）；不是每镜都必须填
 - scene 镜每期最多 1 个；footage 只能引用上面列出的片段 file 名
+- broll 镜是全屏直拼片段镜（连续的 broll 镜会一段接一段全屏播放，不是画中画），必须带 footage，且只能引用已列出的片段
 - 全部 narration 加起来 260–380 个汉字
 - 旁白别写「首先/其次/综上」这种作文腔`
 }
@@ -176,7 +179,10 @@ function normalize(json, rows) {
     const tr = String(s.transition || '').trim()
     shot.transition = TRANSITIONS.includes(tr) ? tr : TRANSITION_DEFAULTS[i % TRANSITION_DEFAULTS.length]
     if (i > 0 && shot.transition === shots[i - 1]?.transition) {
-      shot.transition = TRANSITION_DEFAULTS[(i + 1) % TRANSITION_DEFAULTS.length]
+      for (let k = 1; k <= 6; k++) {
+        const cand = TRANSITION_DEFAULTS[(i + k) % TRANSITION_DEFAULTS.length]
+        if (cand !== shots[i - 1]?.transition) { shot.transition = cand; break }
+      }
     }
     const ef = String(s.effect || '').trim()
     shot.effect = EFFECTS.includes(ef) ? ef : (s.source?.bv ? 'kenburns' : '')
@@ -189,8 +195,23 @@ function normalize(json, rows) {
       const clipName = String(s?.footage?.clip || '')
       if (clipName) {
         const hit = clipIndex().find((c) => c.file === clipName)
-        if (hit) shot.footage = { file: `clips/${hit.file}`, offset: Math.max(0, Number(s.footage?.offset) || 0), clip: hit.file }
+        if (hit) {
+          const clipSec = Number(hit.seconds) || 0
+          let offset = Math.max(0, Number(s.footage?.offset) || 0)
+          if (clipSec > 0 && offset >= clipSec) offset = Math.max(0, clipSec - 5)
+          shot.footage = { file: `clips/${hit.file}`, offset, clip: hit.file }
+        }
       }
+    } else if (kind === 'broll') {
+      shot.headline = String(s.headline || '').slice(0, 20)
+      shot.body = String(s.body || '').slice(0, 40)
+      const clipName = String(s?.footage?.clip || '')
+      const hit = clipName ? clipIndex().find((c) => c.file === clipName) : null
+      if (!hit) throw new Error(`第 ${i + 1} 镜 broll 必须引用已列出的片段`)
+      const clipSec = Number(hit.seconds) || 0
+      let offset = Math.max(0, Number(s.footage?.offset) || 0)
+      if (clipSec > 0 && offset >= clipSec) offset = Math.max(0, clipSec - 5)
+      shot.footage = { file: `clips/${hit.file}`, offset, clip: hit.file }
     }
     shots.push(shot)
   }

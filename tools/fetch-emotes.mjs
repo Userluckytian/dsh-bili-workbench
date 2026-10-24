@@ -2,17 +2,26 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outDir = join(root, 'assets-src', 'memes', 'bili-emotes');
 
-// 1. 获取表情 JSON
-const res = spawnSync('bili', ['comment', 'emotes', '--raw'], {
+// 1. 获取表情 JSON（先解析 bili 可执行文件：优先 BILI_BIN，其次 ~/.local/bin，找不到再靠 PATH）
+const bili = process.env.BILI_BIN || (() => {
+  const p = join(homedir(), '.local', 'bin', process.platform === 'win32' ? 'bili.exe' : 'bili');
+  return existsSync(p) ? p : 'bili';
+})();
+const res = spawnSync(bili, ['comment', 'emotes', '--raw'], {
   encoding: 'utf8',
   windowsHide: true,
   env: { ...process.env, NO_PROXY: process.env.NO_PROXY || 'localhost,127.0.0.1,::1' },
 });
+if (res.error) {
+  console.error(`bili 起不来（${bili}）：${res.error.message}`);
+  process.exit(1);
+}
 const raw = (res.stdout || '') + (res.stderr || '');
 const start = raw.indexOf('{');
 if (start === -1) {

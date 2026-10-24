@@ -129,9 +129,21 @@ function pickBgm(script, runDir) {
   if (!existsSync(abs)) return null
   // 落一份出处进 run 目录，审核时能查来源
   try {
-    writeFileSync(join(runDir, 'bgm.json'), JSON.stringify({ ...pick, pickedMood: want || '(按标题散列)' }, null, 2), 'utf8')
+    writeFileSync(join(runDir, 'bgm.json'), JSON.stringify({ ...pick, pickedMood: want || '(按标题散列)', used: false }, null, 2), 'utf8')
   } catch { /* 记录失败不影响出片 */ }
   return { file: abs, title: pick.title || pick.file, mood: pick.mood, license: pick.license || '?' }
+}
+
+/** BGM 实际混进成片后，把 bgm.json 的 used 改为 true（留痕不再撒谎） */
+function markBgmUsed(runDir) {
+  try {
+    const f = join(runDir, 'bgm.json')
+    if (existsSync(f)) {
+      const j = JSON.parse(readFileSync(f, 'utf8'))
+      j.used = true
+      writeFileSync(f, JSON.stringify(j, null, 2), 'utf8')
+    }
+  } catch { /* 记录失败不影响出片 */ }
 }
 
 async function main() {
@@ -179,6 +191,8 @@ async function main() {
   }
 
   // ④ 合音轨（可选 BGM：从素材库按主题选曲，人声进来时自动压低；转场音效自动叠加）
+  // 视频侧实际比音频长一个 GAP，不能再用 -shortest（会裁掉片尾淡出）；用画面时长截断
+  const totalSec = JSON.parse(readFileSync(propsPath, 'utf8')).totalSeconds
   log('\n④ 合入旁白')
   const videoOut = join(runDir, 'final.mp4')
   const bgm = pickBgm(script, runDir)
@@ -201,10 +215,11 @@ async function main() {
       '-filter_complex',
       '[2:a]volume=0.22[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=8:release=350[bga];' +
       sfxFilters.join(';') + ';' +
-      `[1:a][bga]${sfxLabels}amix=inputs=${2 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[aout]`,
+      `[1:a][bga]${sfxLabels}amix=inputs=${2 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[amx];[amx]alimiter=limit=0.95:level=false[aout]`,
       '-map', '0:v', '-map', '[aout]',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+      '-t', String(totalSec), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', videoOut,
     ], { stdio: 'ignore' })
+    markBgmUsed(runDir)
     log(`   BGM：${bgm.title}（${bgm.mood || '?'} · ${bgm.license}）`)
   } else if (bgm && !flag('no-bgm')) {
     // sidechaincompress：人声当触发器，BGM 被压低（人声停了 BGM 自动回弹）
@@ -213,10 +228,11 @@ async function main() {
       '-stream_loop', '-1', '-i', bgm.file,
       '-filter_complex',
       '[2:a]volume=0.22[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=8:release=350[bga];' +
-      '[1:a][bga]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]',
+      '[1:a][bga]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[amx];[amx]alimiter=limit=0.95:level=false[aout]',
       '-map', '0:v', '-map', '[aout]',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+      '-t', String(totalSec), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', videoOut,
     ], { stdio: 'ignore' })
+    markBgmUsed(runDir)
     log(`   BGM：${bgm.title}（${bgm.mood || '?'} · ${bgm.license}）`)
   } else if (sfxes.length) {
     // 无 BGM 但有音效：人声 + 音效 amix
@@ -233,15 +249,15 @@ async function main() {
       ...sfxInputs,
       '-filter_complex',
       sfxFilters.join(';') + ';' +
-      `[1:a]${sfxLabels}amix=inputs=${1 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[aout]`,
+      `[1:a]${sfxLabels}amix=inputs=${1 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[amx];[amx]alimiter=limit=0.95:level=false[aout]`,
       '-map', '0:v', '-map', '[aout]',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+      '-t', String(totalSec), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', videoOut,
     ], { stdio: 'ignore' })
   } else {
     if (flag('no-bgm')) log('   （--no-bgm：不加 BGM）')
     else if (bgm === null) log('   （BGM 库不可用，纯人声。设 BILI_OP_BGM_DIR 指向 assets-src/bgm 可启用）')
     sh('ffmpeg', ['-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut], { stdio: 'ignore' })
+      '-t', String(totalSec), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', videoOut], { stdio: 'ignore' })
   }
   log(`   ${mb(videoOut)}`)
 

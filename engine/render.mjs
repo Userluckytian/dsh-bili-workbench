@@ -105,6 +105,10 @@ export function prepareRun(proj, plan, version) {
         mkdirSync(clipsPub, { recursive: true })
         copyFileSync(src, join(clipsPub, s.footage.clip))
         out.footage = { file: `clips/${s.footage.clip}`, offset: Number(s.footage.offset) || 0 }
+      } else if (s.kind === 'broll') {
+        throw new Error('broll 镜引用的片段文件不存在：' + s.footage.clip + '（clips/index.json 过期，先跑 engine/clip.mjs 重下）')
+      } else {
+        delete out.footage
       }
     }
     return out

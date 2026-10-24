@@ -374,6 +374,13 @@ const TransitionIn: React.FC<{
   const t = Math.max(0, Math.min(1, frame / T_FRAMES));          // 0→1 入场进度
   const e = spring({ frame, fps, config: { damping: 20, mass: 0.7 } });
 
+  // 持续动效（整镜）：kenburns 留给素材图（ItemShot 内部处理）；shake/pulse 在这里
+  // （提前算好：blinds 分支的 early return 也要把它应用到内容上）
+  const dur = Math.max(1, frames);
+  let fx = "";
+  if (effect === "shake") fx = `translate(${Math.sin(frame * 1.7) * 3}px, ${Math.cos(frame * 2.1) * 2}px)`;
+  else if (effect === "pulse") fx = `scale(${1 + Math.sin((frame / dur) * Math.PI * 2) * 0.012})`;
+
   let enter: React.CSSProperties = { opacity: t };
   if (type === "slide") enter = { opacity: t, transform: `translateX(${(1 - e) * -90}px)` };
   else if (type === "zoom") enter = { opacity: t, transform: `scale(${1 + (1 - e) * 0.12})` };
@@ -384,7 +391,7 @@ const TransitionIn: React.FC<{
     const bars = Array.from({ length: 8 });
     return (
       <div style={{ position: "absolute", inset: 0 }}>
-        <div style={{ position: "absolute", inset: 0, opacity: Math.min(1, t * 2) }}>{children}</div>
+        <div style={{ position: "absolute", inset: 0, opacity: Math.min(1, t * 2), transform: fx || undefined }}>{children}</div>
         {bars.map((_, k) => {
           const delay = k * 0.8;
           const p = Math.max(0, Math.min(1, (frame - delay) / (T_FRAMES - 4)));
@@ -408,12 +415,7 @@ const TransitionIn: React.FC<{
     );
   }
 
-  // 持续动效（整镜）：kenburns 留给素材图（ItemShot 内部处理）；shake/pulse 在这里
-  const dur = Math.max(1, frames);
-  let fx = "";
-  if (effect === "shake") fx = `translate(${Math.sin(frame * 1.7) * 3}px, ${Math.cos(frame * 2.1) * 2}px)`;
-  else if (effect === "pulse") fx = `scale(${1 + Math.sin((frame / dur) * Math.PI * 2) * 0.012})`;
-
+  // 非 blinds 路径：入场 + 持续动效合并（fx 已在上面算好）
   const merged: React.CSSProperties = {
     ...enter,
     transform: [fx, enter.transform].filter(Boolean).join(" ") || undefined,
@@ -422,11 +424,54 @@ const TransitionIn: React.FC<{
 };
 
 /* ───────────── 形象图层 ───────────── */
-const MascotLayer: React.FC<{ src?: string }> = ({ src }) => {
+/* 全屏 B-roll：真视频片段铺满整屏直接播放（轨道拼接模式，非画中画） */
+const BrollShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
+  if (!s.footage?.file) {
+    return (
+      <AbsoluteFill style={{ background: "#0d1424", justifyContent: "center", alignItems: "center", fontFamily: FONT }}>
+        <div style={{ color: "#fff", fontSize: 64, fontWeight: 800 }}>{s.headline}</div>
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 30, marginTop: 20 }}>（片段缺失，已降级为标题卡）</div>
+      </AbsoluteFill>
+    );
+  }
+  const off = Math.round((Number(s.footage?.offset) || 0) * 30);
+  return (
+    <AbsoluteFill style={{ background: "#000" }}>
+      <Video
+        src={staticFile(s.footage.file)}
+        startFrom={off}
+        muted
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+      />
+      {/* 底部渐变 + 大字标题，保证信息还在 */}
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 240, background: "linear-gradient(transparent, rgba(0,0,0,0.72))" }} />
+      <div style={{ position: "absolute", left: 88, right: 88, bottom: 96, fontFamily: FONT }}>
+        <div style={{ color: "#fff", fontSize: 58, fontWeight: 800, textShadow: "0 4px 18px rgba(0,0,0,0.6)" }}>{s.headline}</div>
+        {s.body ? <div style={{ color: "rgba(255,255,255,0.82)", fontSize: 30, marginTop: 14 }}>{s.body}</div> : null}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const MascotLayer: React.FC<{ src?: string; video?: string }> = ({ src, video }) => {
   const frame = useCurrentFrame();
-  if (!src) return null;
+  if (!src && !video) return null;
   const bob = Math.sin(frame / 34) * 10;              // 轻微上下浮动
   const a = spring({ frame, fps: 30, config: { damping: 14, mass: 0.8 } });  // 入场弹跳
+  if (video) {
+    return (
+      <Video src={staticFile(video)} loop muted style={{
+        position: "absolute", right: 96, bottom: 150,
+        width: 260, height: 150,
+        transform: `translateY(${bob}px) scale(${0.6 + a * 0.4})`,
+        opacity: Math.min(1, a + 0.2),
+        filter: "drop-shadow(0 14px 30px rgba(0,0,0,0.45))",
+        zIndex: 50,
+        borderRadius: 16,
+        overflow: "hidden",
+      }} />
+    );
+  }
   return (
     <Img src={staticFile(src)} style={{
       position: "absolute", right: 96, bottom: 150,
@@ -456,10 +501,11 @@ export const News: React.FC<any> = (p) => {
             {s.kind === "data" ? <DataShot s={s} frames={Number(s.frames) || 30} /> : null}
             {s.kind === "outro" ? <OutroShot s={s} frames={Number(s.frames) || 30} /> : null}
             {s.kind === "scene" ? <SceneShot s={s} frames={Number(s.frames) || 30} /> : null}
+            {s.kind === "broll" ? <BrollShot s={s} frames={Number(s.frames) || 30} /> : null}
           </TransitionIn>
         </Sequence>
       ))}
-      <MascotLayer src={p?.mascot} />
+      <MascotLayer src={!p?.mascotVideo ? p?.mascot : undefined} video={p?.mascotVideo} />
       <Progress total={total} />
     </AbsoluteFill>
   );

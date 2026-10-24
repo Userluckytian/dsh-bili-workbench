@@ -85,6 +85,7 @@ const DEFAULTS = {
   mentionName: '',               // 额外 @ 谁；留空=主人 UID / 当前登录账号
   mentions: [],                  // [{ target: UID/昵称, call: 称呼 }]，可多人
   replyPerDay: 20,
+  commentImageEvery: 5,          // 自动评论每 N 条带 1 张表情包（0=关）
   /* 主人 @ 任务：看视频 / 看评论 / 要总结 */
   ownerTasksEnabled: true,
   ownerTaskPollMinutes: 3,       // 每几分钟看一次 @
@@ -214,6 +215,7 @@ function normalizeCfg(c) {
     .filter((m) => m.target)
     .slice(0, out.ownerUid ? 2 : 3)
   out.replyPerDay = clampNum(out.replyPerDay, 0, 200, 20)
+  out.commentImageEvery = clampNum(out.commentImageEvery, 0, 50, 5)
   out.ownerTasksEnabled = out.ownerTasksEnabled !== false
   out.ownerTaskPollMinutes = clampNum(out.ownerTaskPollMinutes, 1, 60, 3)
   out.ownerTaskPerDay = clampNum(out.ownerTaskPerDay, 1, 50, 10)
@@ -308,6 +310,7 @@ function kickTask(id = '') {
         const remain = Math.max(0, cfg.perDay - done)
         if (remain > 0) {
           const aArgs = ['--limit', String(Math.min(remain, 5))]
+          aArgs.push('--image-every', String(cfg.commentImageEvery > 0 ? cfg.commentImageEvery : 0))
           const ac = await runEngine('auto-comment.mjs', aArgs, 10 * 60_000)
           if (ac.text) log('任务采集后自动评论：' + ac.text.slice(-400))
         }
@@ -375,6 +378,7 @@ async function runRound(why = 'manual', { count = 1 } = {}) {
       const remain = Math.max(0, cfg.perDay - done)
       if (remain > 0) {
         const aArgs = ['--limit', String(Math.min(remain, 5))]
+        aArgs.push('--image-every', String(cfg.commentImageEvery > 0 ? cfg.commentImageEvery : 0))
         // @ 谁和称呼由 auto-comment.mjs 直接读配置（支持多人）
         autoComment = await runEngine('auto-comment.mjs', aArgs, 10 * 60_000)
         log('自动评论：' + autoComment.text.slice(-400))
@@ -439,7 +443,7 @@ const jobs = new Map()
 function pctFromLine(line, job) {
   if (/①/.test(line)) return 6
   if (/②\s*配音/.test(line)) return 14
-  const tts = /^\s*(\d+)\s+\[(title|item|data|outro)/.exec(line)
+  const tts = /^\s*(\d+)\s+\[(title|item|data|outro|scene|broll)/.exec(line)
   if (tts) {
     const n = Number(tts[1]) || 1
     return Math.min(44, 14 + Math.round((n / Math.max(1, job.totalShots || 8)) * 30))
@@ -1308,7 +1312,7 @@ export function apply(ctx) {
         'personaPrompt', 'reportLevel', 'favFolderId',
         'memoryEnabled', 'userCharLimit', 'memoryCharLimit', 'reflectEnabled', 'memoryEventsMax',
         'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',
-        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay',
+        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay', 'commentImageEvery',
         'ownerTasksEnabled', 'ownerTaskPollMinutes', 'ownerTaskPerDay', 'ownerTaskAllowDm', 'ownerTaskMaxAgeHours',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
         'voice', 'modelChain', 'concurrency',

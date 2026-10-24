@@ -129,6 +129,7 @@ async function main() {
     console.log(`  ${String(n).padStart(2)} [${shot.kind.padEnd(5)}] ${sec.toFixed(2)}s → ${frames} 帧  (${Date.now() - t0} ms)`)
   }
 
+  props.mascotVideo = script.mascot === false ? undefined : (script.mascotVideo === false ? undefined : (script.mascotVideo || 'mascot/dafieiyu-anim.mp4'))
   props.mascot = script.mascot === false ? undefined : (script.mascot || 'mascot/default.png')
   props.totalFrames = totalFrames
   props.totalSeconds = Number(cursor.toFixed(2))
