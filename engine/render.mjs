@@ -98,6 +98,15 @@ export function prepareRun(proj, plan, version) {
         } catch { /* 拷不过去就不带图 */ }
       }
     }
+    if (s.footage?.clip) {
+      const src = join(STORE, '..', 'assets-src', 'clips', s.footage.clip)
+      if (existsSync(src)) {
+        const clipsPub = join(PUBLIC_PLANS, '..', 'clips')
+        mkdirSync(clipsPub, { recursive: true })
+        copyFileSync(src, join(clipsPub, s.footage.clip))
+        out.footage = { file: `clips/${s.footage.clip}`, offset: Number(s.footage.offset) || 0 }
+      }
+    }
     return out
   })
 

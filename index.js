@@ -519,7 +519,9 @@ function startRender(project, plan, version, voice) {
       plans.saveProject(project)
       memory.addEvent('render', { runId, projectId: project.id, text: `渲染《${plan.title || project.id}》成功，${st?.seconds || '?'} 秒成片已出` })
       log(`出片完成 ${runId}（${st?.seconds || '?'} 秒，真实帧 ${frameCount}）`)
-      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
+      runReflect()
+        .then((r) => { if (r && !r.ok && !r.skipped) log('复盘失败：' + String(r.error || '').split('\n')[0]) })
+        .catch((e) => { log('复盘异常：' + String(e?.message ?? e).split('\n')[0]) })
     } else {
       job.stage = 'failed'
       job.error = job.log.slice(-1200) || ('退出码 ' + code)
@@ -527,7 +529,9 @@ function startRender(project, plan, version, voice) {
       plans.saveProject(project)
       memory.addEvent('render', { runId, projectId: project.id, ok: false, text: `渲染《${plan.title || project.id}》失败：${job.error.slice(0, 60)}` })
       log(`出片失败 ${runId}（退出码 ${code}）`)
-      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
+      runReflect()
+        .then((r) => { if (r && !r.ok && !r.skipped) log('复盘失败：' + String(r.error || '').split('\n')[0]) })
+        .catch((e) => { log('复盘异常：' + String(e?.message ?? e).split('\n')[0]) })
     }
   })
   return job
@@ -833,7 +837,9 @@ export function apply(ctx) {
       const project = plans.createProject(plan, { brief })
       log(`新方案 ${project.id}：${plan.title}`)
       // 方案完成后复盘一次（节流在 reflect.mjs 里）：主人的指令是提炼习惯的重要来源
-      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
+      runReflect()
+        .then((r) => { if (r && !r.ok && !r.skipped) log('复盘失败：' + String(r.error || '').split('\n')[0]) })
+        .catch((e) => { log('复盘异常：' + String(e?.message ?? e).split('\n')[0]) })
       return sendJson(res, 200, { ok: true, project, plan, log: (r.text || '').slice(-2500) })
     }
     if (req.method === 'POST' && path === '/create/revise') {
@@ -1079,7 +1085,9 @@ export function apply(ctx) {
       }
       log(`审核 ${runId}：${state}`)
       // 打回原因 / 通过偏好是复盘的重要素材，审完跑一次（节流在 reflect.mjs）
-      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
+      runReflect()
+        .then((r) => { if (r && !r.ok && !r.skipped) log('复盘失败：' + String(r.error || '').split('\n')[0]) })
+        .catch((e) => { log('复盘异常：' + String(e?.message ?? e).split('\n')[0]) })
       return sendJson(res, 200, { ok: true, status: renders.readStatus(runId) })
     }
     if (req.method === 'GET' && path === '/review/stats') {
@@ -1126,7 +1134,9 @@ export function apply(ctx) {
         }
         memory.addEvent('publish', { runId, bvid, text: `投稿了《${String(body.title || st.title || '').slice(0, 30)}》${bvid ? '（' + bvid + '）' : ''}` })
         log(`已投稿 ${runId} → ${bvid || '(无 BV)'}`)
-        runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
+        runReflect()
+        .then((r) => { if (r && !r.ok && !r.skipped) log('复盘失败：' + String(r.error || '').split('\n')[0]) })
+        .catch((e) => { log('复盘异常：' + String(e?.message ?? e).split('\n')[0]) })
       }
       return sendJson(res, 200, {
         ok: r.ok, dryRun, command: [runBiliName(), ...args],

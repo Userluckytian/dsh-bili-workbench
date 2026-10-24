@@ -23,7 +23,18 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
   return i > 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : dflt
 }
-const KINDS = new Set(['title', 'item', 'data', 'outro'])
+const KINDS = new Set(['title', 'item', 'data', 'outro', 'scene'])
+/* 已裁剪的视频片段索引（assets-src/clips）；插件布局没有该目录时返回空 */
+function clipIndex() {
+  try {
+    const f = join(STORE, '..', 'assets-src', 'clips', 'index.json')
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : []
+  } catch { return [] }
+}
+/* 转场/动效白名单：模型只能从这里面挑（渲染端按同名实现） */
+const TRANSITIONS = ['fade', 'slide', 'blinds', 'wipe', 'zoom', 'dissolve']
+const EFFECTS = ['kenburns', 'shake', 'pulse']
+const TRANSITION_DEFAULTS = ['slide', 'blinds', 'wipe', 'zoom', 'dissolve', 'fade']
 const cn = (s) => String(s || '').replace(/\s/g, '').length
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`
 
@@ -59,6 +70,7 @@ function recallLine() {
 }
 
 function buildPrompt(brief, rows, limit, revise = null) {
+  const clips = clipIndex()
   const lines = rows.slice(0, limit).map((r, i) => {
     const q = (r.quotes || []).slice(0, 3).map((x) => `${Math.round(x.t)}s「${x.text.slice(0, 18)}」`).join(' / ')
     return `${i + 1}. ${r.bvid} | ${String(r.title).slice(0, 40)} | ${r.up?.name || '?'} | ${Math.round((r.duration || 0) / 60)}分 | ${r.judge?.tier || '未判定'} | ${r.subtitle?.chars || 0}字`
@@ -73,6 +85,9 @@ function buildPrompt(brief, rows, limit, revise = null) {
 
 素材库索引（${rows.length} 条，只用这些）：
 ${lines}
+
+已裁剪好的视频片段（item 镜可直接播放原片片段，用 footage 引用；没有合适的就不用）：
+${clips.map((c) => `${c.file}（${String(c.title).slice(0, 20)} · ${Math.round(c.seconds || 0)}s）`).join('\n') || '（暂无）'}
 ${reviseBlock}
 
 请输出：
@@ -86,7 +101,12 @@ ${reviseBlock}
   "shots": [
     { "kind": "title", "headline": "…", "sub": "…", "narration": "30–45字口语" },
     { "kind": "item", "headline": "≤16字", "body": "≤40字", "badge": "2–4字", "narration": "30–45字",
-      "source": { "bv": "BV…", "t": 39 } },
+      "source": { "bv": "BV…", "t": 39 },
+      "footage": { "clip": "片段的 file 名", "offset": 秒 },
+      "transition": "slide" | "blinds" | "wipe" | "zoom" | "dissolve" | "fade",
+      "effect": "kenburns" | "shake" | "pulse" },
+    { "kind": "scene", "headline": "≤16字", "lines": [{ "who": "L" | "R", "text": "≤20字台词" }]（3–5 句）,
+      "narration": "30–60字" },
     { "kind": "data", "headline": "…", "stats": [{ "label": "≤6字", "value": "≤10字" }], "narration": "…" },
     { "kind": "outro", "headline": "…", "sub": "…", "narration": "…" }
   ]
@@ -95,6 +115,8 @@ ${reviseBlock}
 硬性要求：
 - picks 至少 3 条，必须来自上面的索引，不许编 BV 号
 - shots 里每个 item 镜**尽量**带 source（bv + t），t 用索引里出现的秒数或你判断的关键时刻
+- transition 只能从列出的 6 个里选，相邻镜头不要重复；effect 是这一镜的持续动效（有素材画面的镜头优先 kenburns）；不是每镜都必须填
+- scene 镜每期最多 1 个；footage 只能引用上面列出的片段 file 名
 - 全部 narration 加起来 260–380 个汉字
 - 旁白别写「首先/其次/综上」这种作文腔`
 }
@@ -137,17 +159,38 @@ function normalize(json, rows) {
       shot.headline = String(s.headline || '').slice(0, 22)
       shot.body = String(s.body || '').slice(0, 48)
       shot.badge = String(s.badge || '').slice(0, 6)
+    } else if (kind === 'scene') {
+      shot.headline = String(s.headline || '').slice(0, 22)
+      shot.lines = (Array.isArray(s.lines) ? s.lines : []).slice(0, 6)
+        .map((l) => ({ who: l?.who === 'R' ? 'R' : 'L', text: String(l?.text || '').slice(0, 30) }))
+        .filter((l) => l.text)
+      if (!shot.lines.length) throw new Error(`第 ${i + 1} 镜 scene 至少要有一句台词`)
     } else if (kind === 'data') {
       shot.headline = String(s.headline || '').slice(0, 22)
       shot.stats = (Array.isArray(s.stats) ? s.stats : [])
         .map((x) => ({ label: String(x?.label || '').slice(0, 8), value: String(x?.value || '').slice(0, 12) }))
         .filter((x) => x.label && x.value).slice(0, 4)
     }
-    // 绑定素材
+    // 转场/动效：白名单校验；模型没填就确定性轮换（相邻不重复）
     const srcBv = String(s?.source?.bv || '')
+    const tr = String(s.transition || '').trim()
+    shot.transition = TRANSITIONS.includes(tr) ? tr : TRANSITION_DEFAULTS[i % TRANSITION_DEFAULTS.length]
+    if (i > 0 && shot.transition === shots[i - 1]?.transition) {
+      shot.transition = TRANSITION_DEFAULTS[(i + 1) % TRANSITION_DEFAULTS.length]
+    }
+    const ef = String(s.effect || '').trim()
+    shot.effect = EFFECTS.includes(ef) ? ef : (s.source?.bv ? 'kenburns' : '')
+    // 绑定素材
     if (byBv.has(srcBv)) {
       const snap = snapToSubtitle(srcBv, Number(s?.source?.t) || 0)
       shot.source = { bv: srcBv, t: snap.t, quote: snap.text, snapped: snap.snapped, frame: 'auto' }
+    }
+    if (kind === 'item') {
+      const clipName = String(s?.footage?.clip || '')
+      if (clipName) {
+        const hit = clipIndex().find((c) => c.file === clipName)
+        if (hit) shot.footage = { file: `clips/${hit.file}`, offset: Math.max(0, Number(s.footage?.offset) || 0), clip: hit.file }
+      }
     }
     shots.push(shot)
   }

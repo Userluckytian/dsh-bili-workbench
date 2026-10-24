@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Img,
   Sequence,
+  Video,
   interpolate,
   spring,
   staticFile,
@@ -135,7 +136,9 @@ const TitleShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
 
 const ItemShot: React.FC<{ s: any; frames: number; total: number }> = ({ s, frames, total }) => {
   const a = useAnim(frames);
-  const hasFrame = Boolean(s.frameImage);
+  const frame = useCurrentFrame();
+  const hasFrame = Boolean(s.frameImage) || Boolean(s.footage?.file);
+  const hasFootage = Boolean(s.footage?.file);
   return (
     <AbsoluteFill style={{ opacity: a.opacity }}>
       <TopBar label="资讯盘点" right={`第 ${s.index || ""} 条 · 共 ${total} 条`} />
@@ -201,7 +204,29 @@ const ItemShot: React.FC<{ s: any; frames: number; total: number }> = ({ s, fram
               transform: `scale(${a.scale})`,
             }}
           >
-            <Img src={staticFile(s.frameImage)} style={{ width: "100%", display: "block" }} />
+            <div
+              style={
+                s.effect === "kenburns" && !hasFootage
+                  ? {
+                      // 缓慢推近：整镜内 scale 1.0 → 1.10，加一点横向漂移
+                      height: "100%",
+                      transform: `scale(${1 + (frame / Math.max(1, frames)) * 0.1}) translateX(${(frame / Math.max(1, frames)) * -12}px)`,
+                      transformOrigin: "center",
+                    }
+                  : undefined
+              }
+            >
+              {hasFootage ? (
+                <Video
+                  src={staticFile(s.footage.file)}
+                  startFrom={Math.round((Number(s.footage.offset) || 0) * 30)}
+                  muted
+                  style={{ width: "100%", display: "block" }}
+                />
+              ) : (
+                <Img src={staticFile(s.frameImage)} style={{ width: "100%", display: "block" }} />
+              )}
+            </div>
             <div
               style={{
                 display: "flex",
@@ -267,6 +292,41 @@ const DataShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
   );
 };
 
+/* 小剧场：双角色 + 对话气泡（台词随镜头时长均分切换） */
+const SceneShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
+  const frame = useCurrentFrame();
+  const lines = Array.isArray(s.lines) ? s.lines : [];
+  const lineIdx = Math.min(lines.length - 1, Math.floor((frame / Math.max(1, frames)) * lines.length));
+  const line = lines[lineIdx] || { who: "L", text: "" };
+  const activeL = line.who === "L";
+  const bob = (on: boolean) => (on ? `translateY(${Math.sin(frame / 4) * 8}px) scale(1.04)` : "translateY(0) scale(1)");
+  return (
+    <AbsoluteFill>
+      <TopBar label="咕嘎小剧场" right={s.headline || ""} />
+      <div style={{ position: "absolute", top: 150, left: 0, right: 0, textAlign: "center", fontFamily: FONT }}>
+        <div style={{ display: "inline-block", padding: "10px 28px", borderRadius: 14, background: "rgba(91,140,255,0.16)", border: "1px solid rgba(91,140,255,0.5)", color: "#cfe0ff", fontSize: 34, fontWeight: 700 }}>
+          {s.headline}
+        </div>
+      </div>
+      {/* 气泡：跟着说话人 */}
+      <div style={{
+        position: "absolute", top: 300,
+        left: activeL ? 220 : undefined, right: activeL ? undefined : 220,
+        maxWidth: 640, padding: "22px 30px", borderRadius: 20,
+        background: "rgba(255,255,255,0.94)", color: "#1a2233",
+        fontSize: 36, fontWeight: 600, lineHeight: 1.45, fontFamily: FONT,
+        boxShadow: "0 18px 44px rgba(0,0,0,0.4)",
+      }}>
+        {line.text}
+        <div style={{ fontSize: 22, color: "#8593ad", marginTop: 8 }}>{activeL ? "—— 咕嘎" : "—— 小狗"}</div>
+      </div>
+      {/* 角色 */}
+      <Img src={staticFile(s.left || "mascot/default.png")} style={{ position: "absolute", left: 170, bottom: 200, width: 300, height: 300, opacity: activeL ? 1 : 0.62, transform: bob(activeL), filter: "drop-shadow(0 16px 34px rgba(0,0,0,0.45))", transition: "opacity 200ms" }} />
+      <Img src={staticFile(s.right || "mascot/partner.png")} style={{ position: "absolute", right: 170, bottom: 200, width: 300, height: 300, opacity: activeL ? 0.62 : 1, transform: bob(!activeL), filter: "drop-shadow(0 16px 34px rgba(0,0,0,0.45))" }} />
+    </AbsoluteFill>
+  );
+};
+
 const OutroShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
   const a = useAnim(frames);
   return (
@@ -297,6 +357,88 @@ const OutroShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
   );
 };
 
+/* ───────────── 转场（入场动画）+ 持续动效 ─────────────
+ * 转场只做「进入这一镜」的前 T 帧动画，由方案里每镜的 transition 字段驱动（plan.mjs 白名单）。
+ * blinds 用 8 根竖条帘幕收起实现；wipe 用 clip-path 从右往左揭开；其余是位移/缩放/模糊。
+ */
+const T_FRAMES = 10;
+
+const TransitionIn: React.FC<{
+  type?: string;
+  effect?: string;
+  frames: number;
+  children: React.ReactNode;
+}> = ({ type = "fade", effect = "", frames, children }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = Math.max(0, Math.min(1, frame / T_FRAMES));          // 0→1 入场进度
+  const e = spring({ frame, fps, config: { damping: 20, mass: 0.7 } });
+
+  let enter: React.CSSProperties = { opacity: t };
+  if (type === "slide") enter = { opacity: t, transform: `translateX(${(1 - e) * -90}px)` };
+  else if (type === "zoom") enter = { opacity: t, transform: `scale(${1 + (1 - e) * 0.12})` };
+  else if (type === "dissolve") enter = { opacity: t, filter: `blur(${(1 - t) * 10}px)` };
+  else if (type === "wipe") enter = { clipPath: `inset(0 ${(1 - e) * 100}% 0 0)` };
+  else if (type === "blinds") {
+    // 帘幕：8 根竖条依次收起，内容在下面
+    const bars = Array.from({ length: 8 });
+    return (
+      <div style={{ position: "absolute", inset: 0 }}>
+        <div style={{ position: "absolute", inset: 0, opacity: Math.min(1, t * 2) }}>{children}</div>
+        {bars.map((_, k) => {
+          const delay = k * 0.8;
+          const p = Math.max(0, Math.min(1, (frame - delay) / (T_FRAMES - 4)));
+          return (
+            <div
+              key={k}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: `${k * 12.5}%`,
+                width: "12.6%",
+                height: "100%",
+                background: "#080c18",
+                transformOrigin: "top",
+                transform: `scaleY(${1 - p})`,
+              }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
+  // 持续动效（整镜）：kenburns 留给素材图（ItemShot 内部处理）；shake/pulse 在这里
+  const dur = Math.max(1, frames);
+  let fx = "";
+  if (effect === "shake") fx = `translate(${Math.sin(frame * 1.7) * 3}px, ${Math.cos(frame * 2.1) * 2}px)`;
+  else if (effect === "pulse") fx = `scale(${1 + Math.sin((frame / dur) * Math.PI * 2) * 0.012})`;
+
+  const merged: React.CSSProperties = {
+    ...enter,
+    transform: [fx, enter.transform].filter(Boolean).join(" ") || undefined,
+  };
+  return <div style={{ position: "absolute", inset: 0, ...merged }}>{children}</div>;
+};
+
+/* ───────────── 形象图层 ───────────── */
+const MascotLayer: React.FC<{ src?: string }> = ({ src }) => {
+  const frame = useCurrentFrame();
+  if (!src) return null;
+  const bob = Math.sin(frame / 34) * 10;              // 轻微上下浮动
+  const a = spring({ frame, fps: 30, config: { damping: 14, mass: 0.8 } });  // 入场弹跳
+  return (
+    <Img src={staticFile(src)} style={{
+      position: "absolute", right: 96, bottom: 150,
+      width: 200, height: 200,
+      transform: `translateY(${bob}px) scale(${0.6 + a * 0.4})`,
+      opacity: Math.min(1, a + 0.2),
+      filter: "drop-shadow(0 14px 30px rgba(0,0,0,0.45))",
+      zIndex: 50,
+    }} />
+  );
+};
+
 /* ───────────── 主组件 ───────────── */
 export const News: React.FC<any> = (p) => {
   const shots = Array.isArray(p?.shots) ? p.shots : [];
@@ -308,12 +450,16 @@ export const News: React.FC<any> = (p) => {
       <Bg />
       {shots.map((s: any, i: number) => (
         <Sequence key={i} from={Number(s.from) || 0} durationInFrames={Math.max(1, Number(s.frames) || 30)}>
-          {s.kind === "title" ? <TitleShot s={s} frames={Number(s.frames) || 30} /> : null}
-          {s.kind === "item" ? <ItemShot s={s} frames={Number(s.frames) || 30} total={itemTotal} /> : null}
-          {s.kind === "data" ? <DataShot s={s} frames={Number(s.frames) || 30} /> : null}
-          {s.kind === "outro" ? <OutroShot s={s} frames={Number(s.frames) || 30} /> : null}
+          <TransitionIn type={s.transition} effect={s.effect} frames={Number(s.frames) || 30}>
+            {s.kind === "title" ? <TitleShot s={s} frames={Number(s.frames) || 30} /> : null}
+            {s.kind === "item" ? <ItemShot s={s} frames={Number(s.frames) || 30} total={itemTotal} /> : null}
+            {s.kind === "data" ? <DataShot s={s} frames={Number(s.frames) || 30} /> : null}
+            {s.kind === "outro" ? <OutroShot s={s} frames={Number(s.frames) || 30} /> : null}
+            {s.kind === "scene" ? <SceneShot s={s} frames={Number(s.frames) || 30} /> : null}
+          </TransitionIn>
         </Sequence>
       ))}
+      <MascotLayer src={p?.mascot} />
       <Progress total={total} />
     </AbsoluteFill>
   );

@@ -17,7 +17,7 @@
  *  · 无人值守只允许 add；patch/remove 走 pending.json 待批
  */
 import {
-  existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, appendFileSync,
+  existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, appendFileSync, statSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { STORE } from './store.mjs'
@@ -96,8 +96,12 @@ async function withLock(fn) {
   for (let i = 0; i < 40; i++) {
     try { mkdirSync(lockDir); locked = true; break } catch {
       try {
+        // 陈锁判定：stamp 过期，或目录本身存在超过 10 秒（拿锁后写 stamp 前崩溃的窗口，没有 stamp 也能自愈）
         const st = existsSync(join(lockDir, 'stamp')) && Number(readFileSync(join(lockDir, 'stamp'), 'utf8'))
-        if (Number.isFinite(st) && Date.now() - st > 10_000) rmSync(lockDir, { recursive: true, force: true })
+        const dirAge = (() => { try { return Date.now() - statSync(lockDir).mtimeMs } catch { return 0 } })()
+        if ((Number.isFinite(st) && Date.now() - st > 10_000) || dirAge > 10_000) {
+          rmSync(lockDir, { recursive: true, force: true })
+        }
       } catch { /* 拿不到状态就等下一轮 */ }
       if (i === 39) throw new Error('memory 目录锁等待超时')
       await new Promise((r) => setTimeout(r, 100))
@@ -202,21 +206,27 @@ function readEvents() {
   } catch { return [] }
 }
 
-/** 记一条经历。type: watched/plan/render/review/comment/reply/dm/publish/task/remember */
-export function addEvent(type, data = {}) {
+/** 记一条经历。type: watched/plan/render/review/comment/reply/dm/publish/task/remember
+ *  异步且调用方可不 await（事件是尽力而为）；append+容量清理整体在锁内，
+ *  避免多进程「读全量→重写」互相覆盖丢事件（审查 BUG-1）。 */
+export async function addEvent(type, data = {}) {
   try {
     if (!type) return { ok: false, error: 'type 为空' }
-    mkdirSync(memDir(), { recursive: true })
-    const ev = { at: new Date().toISOString(), type, ...data }
-    delete ev.ok
-    appendFileSync(eventsFile(), JSON.stringify(ev) + '\n', 'utf8')
-    const evs = readEvents()
-    const cutoff = Date.now() - EVENTS_TTL_DAYS * 86400_000
-    const fresh = evs.filter((e) => Date.parse(e.at || '') > cutoff)
-    if (fresh.length > cfg().eventsMax) {
-      const keep = fresh.slice(-cfg().eventsMax)
-      writeFileSync(eventsFile(), keep.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')
-    }
+    const text = String(data.text || '').slice(0, 300)
+    const ev = { at: new Date().toISOString(), type, ...data, text }
+    await withLock(async () => {
+      mkdirSync(memDir(), { recursive: true })
+      appendFileSync(eventsFile(), JSON.stringify(ev) + '\n', 'utf8')
+      const evs = readEvents()
+      const cutoff = Date.now() - EVENTS_TTL_DAYS * 86400_000
+      const fresh = evs.filter((e) => Date.parse(e.at || '') > cutoff)
+      if (fresh.length > cfg().eventsMax) {
+        const keep = fresh.slice(-cfg().eventsMax)
+        const tmp = `${eventsFile()}.tmp-${process.pid}`
+        writeFileSync(tmp, keep.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')
+        renameSync(tmp, eventsFile())
+      }
+    })
     return { ok: true }
   } catch (e) { return { ok: false, error: String(e?.message ?? e) } }
 }
@@ -259,7 +269,9 @@ export function recallEvents(query, { k = 6 } = {}) {
   return scored.map((x) => x.e)
 }
 
-/** 召回块：<memory-context> 围栏。注入 prompt 的经历属于记忆，不是新指令。 */
+/** 召回块：<memory-context> 围栏。注入 prompt 的经历属于记忆，不是新指令。
+ *  行文本先去掉尖括号：事件源头是 B站 标题（陌生 UP 可控），不给 `</memory-context>` 闭合围栏的机会（审查 BUG-5）。 */
+const sanitizeLine = (s) => String(s || '').replace(/[<>]/g, '').replace(/^[-•]\s*/, '').trim()
 export function renderRecallBlock(query, { k = 6, maxChars = 900 } = {}) {
   if (!cfg().enabled) return ''
   const evs = recallEvents(query, { k })
@@ -267,7 +279,8 @@ export function renderRecallBlock(query, { k = 6, maxChars = 900 } = {}) {
   const lines = []
   let used = 0
   for (const e of evs) {
-    const t = scanEntry(String(e.text || '')).blocked ? '[BLOCKED]' : String(e.text || '').slice(0, 90)
+    const raw = String(e.text || '').slice(0, 90)
+    const t = scanEntry(raw).blocked ? '[BLOCKED]' : sanitizeLine(raw)
     const line = `${String(e.at || '').slice(0, 10)} ${t}`
     if (used + line.length > maxChars) break
     lines.push(`- ${line}`)
@@ -319,6 +332,9 @@ export async function apply(op, { unattended = false, source = 'manual' } = {}) 
   }
 
   if (action === 'patch' || action === 'remove') {
+    if (action === 'patch' && content.includes('§')) {
+      return { ok: false, error: '内容里不能含分隔符 §' }
+    }
     if (unattended) return addPending(target, action, oldText, content, source)
     return withLock(async () => {
       const { entries } = readTarget(target)
@@ -344,88 +360,107 @@ export async function apply(op, { unattended = false, source = 'manual' } = {}) 
   return { ok: false, error: `不认识的 action：${action}` }
 }
 
-/** batch：一次多条，全有或全无（失败回滚已执行部分；预算超限在单条上被拦） */
+/** batch：一次多条，全有或全无。
+ *  回滚用「文件快照整恢复」而不是逐条反向操作——逐条回滚在 patch/去重场景会写错对象、
+ *  打乱条目顺序（审查 BUG-2/BUG-11），快照恢复既不丢内容也保序。 */
 export async function applyBatch(ops, opts = {}) {
   const list = Array.isArray(ops) ? ops : []
   if (!list.length) return { ok: false, error: 'operations 为空' }
   for (const o of list) {
     if (!['add', 'patch', 'remove'].includes(o?.action)) return { ok: false, error: 'batch 里混进了不认识的 action' }
   }
+  const restore = async () => {
+    for (const t of ['user', 'memory']) {
+      const raw = snapshots[t]
+      if (raw === undefined) continue
+      const f = fileOf(t)
+      const tmp = `${f}.tmp-${process.pid}`
+      writeFileSync(tmp, raw, 'utf8')
+      renameSync(tmp, f)
+    }
+  }
+  const snapshots = {}
+  for (const t of ['user', 'memory']) {
+    try { snapshots[t] = existsSync(fileOf(t)) ? readFileSync(fileOf(t), 'utf8') : '' } catch { /* 读不了的文件不动 */ }
+  }
   const done = []
   for (const o of list) {
-    let removedText = ''
-    if (o.action !== 'add') {
-      try {
-        const snap = snapshotOf(o.target)
-        const hit = locate(snap, String(o.old_text ?? '').trim())
-        if (!hit.err) removedText = snap[hit.idx]
-      } catch { /* 下面 apply 会给出具体错误 */ }
-    }
     const r = await apply(o, { ...opts, unattended: false })
     if (!r.ok) {
-      // 回滚已执行的部分，保证全有或全无
-      for (let i = done.length - 1; i >= 0; i--) {
-        const d = done[i]
-        try {
-          if (d.action === 'add') await apply({ target: d.target, action: 'remove', old_text: d.content }, opts)
-          else if (d.action === 'remove') await apply({ target: d.target, action: 'add', content: d.removedText }, opts)
-          else await apply({ target: d.target, action: 'patch', old_text: d.content, new_text: d.oldText }, opts)
-        } catch { /* 回滚失败只能尽力 */ }
-      }
+      await restore().catch(() => { /* 恢复失败只能尽力 */ })
       return { ok: false, error: `第 ${done.length + 1} 条失败，已回滚：${r.error}` }
     }
-    done.push({ action: o.action, target: o.target, content: String(o.content ?? o.new_text ?? '').trim(), oldText: String(o.old_text ?? '').trim(), removedText })
+    if (!r.deduped) done.push(o)
   }
   return { ok: true, count: done.length }
 }
-const snapshotOf = (target) => readTarget(target).entries
 
 /* ── pending（无人值守的 patch/remove 待批） ── */
 function loadPending() { return readJson(pendingFile(), { seq: 0, items: [] }) }
 function savePending(p) { writeFileSync(pendingFile(), JSON.stringify(p, null, 2), 'utf8') }
 
 async function addPending(target, action, oldText, newText, source) {
-  const p = loadPending()
-  const entries = readTarget(target).entries
-  const hit = locate(entries, oldText)
-  // 待批提案记下当时匹配到的完整条目；批准时只认这一条
-  p.items.push({
-    id: ++p.seq, target, action,
-    old_text: oldText, new_text: newText,
-    matched_entry: hit.err ? null : entries[hit.idx],
-    source: source || 'unattended', at: new Date().toISOString(),
+  // pending 本体的读-改-写也在锁内（审查 BUG-10：并发批准互相覆盖会让条目「复活」）
+  return withLock(async () => {
+    const p = loadPending()
+    const entries = readTarget(target).entries
+    const hit = locate(entries, oldText)
+    // 待批提案记下当时匹配到的完整条目；批准时只认这一条
+    p.items.push({
+      id: ++p.seq, target, action,
+      old_text: oldText, new_text: newText,
+      matched_entry: hit.err ? null : entries[hit.idx],
+      source: source || 'unattended', at: new Date().toISOString(),
+    })
+    savePending(p)
+    return { ok: true, pending: true, id: p.seq }
   })
-  savePending(p)
-  return { ok: true, pending: true, id: p.seq }
 }
 
 export async function approvePending(id) {
-  const p = loadPending()
-  const item = p.items.find((x) => x.id === Number(id))
-  if (!item) return { ok: false, error: `没有这条待批（#${id}）` }
-  // 条目已被改动 → 提案作废
-  if (item.matched_entry) {
-    const cur = readTarget(item.target).entries
-    if (!cur.some((e) => normKey(e) === normKey(item.matched_entry))) {
-      p.items = p.items.filter((x) => x.id !== item.id); savePending(p)
-      return { ok: false, error: '原条目已变化，提案作废；请重新发起' }
+  // 拿锁只做 pending 的校验与移除；真正写 MD 的 apply 自己拿锁（不能嵌套）
+  const taken = await withLock(async () => {
+    const p = loadPending()
+    const item = p.items.find((x) => x.id === Number(id))
+    if (!item) return { err: `没有这条待批（#${id}）` }
+    // 条目已被改动 → 提案作废
+    if (item.matched_entry) {
+      const cur = readTarget(item.target).entries
+      if (!cur.some((e) => normKey(e) === normKey(item.matched_entry))) {
+        p.items = p.items.filter((x) => x.id !== item.id); savePending(p)
+        return { err: '原条目已变化，提案作废；请重新发起' }
+      }
     }
-  }
+    p.items = p.items.filter((x) => x.id !== item.id)
+    savePending(p)
+    return { item }
+  })
+  if (taken.err) return { ok: false, error: taken.err }
+  const item = taken.item
   const r = await apply({
     target: item.target, action: item.action,
     old_text: item.matched_entry || item.old_text,
     content: item.new_text, new_text: item.new_text,
   }, { source: `approve:#${item.id}` })
-  if (r.ok) { p.items = p.items.filter((x) => x.id !== item.id); savePending(p) }
+  // apply 失败把提案放回去，别让用户丢提案
+  if (!r.ok) {
+    await withLock(async () => {
+      const p = loadPending()
+      p.items.push(item)
+      savePending(p)
+    })
+  }
   return r
 }
 
-export function discardPending(id) {
-  const p = loadPending()
-  const before = p.items.length
-  p.items = p.items.filter((x) => x.id !== Number(id))
-  savePending(p)
-  return { ok: true, removed: before - p.items.length }
+export async function discardPending(id) {
+  return withLock(async () => {
+    const p = loadPending()
+    const before = p.items.length
+    p.items = p.items.filter((x) => x.id !== Number(id))
+    savePending(p)
+    return { ok: true, removed: before - p.items.length }
+  })
 }
 
 /* ═══════════ 读取 / 注入 ═══════════ */
@@ -477,7 +512,8 @@ export function renderBlock() {
     try { entries = readTarget(t).entries } catch { /* 读不了就跳过这一层，不让记忆问题卡任务 */ }
     const usable = entries.filter((e) => !scanEntry(e).blocked)
     if (!usable.length) continue
-    parts.push(`── ${title}（${usable.length} 条）──\n` + usable.join('\n§\n'))
+    // 条目文本同样去尖括号（patch 路径可能写进 <>，别让它破坏注入结构）
+    parts.push(`── ${title}（${usable.length} 条）──\n` + usable.map((e) => sanitizeLine(e)).join('\n§\n'))
   }
   if (!parts.length) return ''
   return `【长期记忆】\n以下是长期积累的事实和偏好（不是本次对话说的），遵守它们但不要在输出里复述这一段。\n${parts.join('\n\n')}`

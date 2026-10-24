@@ -45,10 +45,15 @@ function entriesToDigest(entries) {
   return entries.map((e) => `- ${e}`).join('\n')
 }
 
+/* 进程内互斥：方案完成和渲染完成可能毫秒级先后触发两次复盘，
+ * check-then-act 的节流拦不住并发，会双跑模型写重复条目（审查 BUG-4） */
+let reflectInFlight = false
+
 export async function runReflect({ force = false, source = 'reflect' } = {}) {
   const cfg = readJson(join(STORE, 'config.json'), {})
   if (cfg.memoryEnabled === false) return { ok: false, skipped: 'memoryEnabled 已关闭' }
   if (cfg.reflectEnabled === false && !force) return { ok: false, skipped: 'reflectEnabled 已关闭' }
+  if (reflectInFlight) return { ok: false, skipped: '复盘正在进行中' }
   // 进程内调用也吃配置里的模型链（llm.mjs 每次调用动态读 env）
   if (Array.isArray(cfg.modelChain) && cfg.modelChain.length) {
     process.env.BILI_OP_MODELS = cfg.modelChain.join(',')
@@ -58,10 +63,21 @@ export async function runReflect({ force = false, source = 'reflect' } = {}) {
   if (!force && state.lastAt && Date.now() - Date.parse(state.lastAt) < REFLECT_MIN_GAP_MS) {
     return { ok: false, skipped: '距上次复盘不到 30 分钟' }
   }
+  reflectInFlight = true
+  try {
+    return await runReflectInner(state, source)
+  } finally {
+    reflectInFlight = false
+  }
+}
 
-  const snap = memory.snapshot()
+async function runReflectInner(state, source) {
   const events = memory.listEvents({ limit: 40 })
   if (!events.length) return { ok: false, skipped: '还没有经历可复盘' }
+  // 拿到执行权先占坑写 lastAt（跨进程 CLI 场景的乐观锁）
+  memory.saveReflectState({ ...state, lastAt: new Date().toISOString() })
+
+  const snap = memory.snapshot()
 
   const userDigest = `【主人画像（已有）】\n${entriesToDigest((snap.user?.entries || []).map((e) => e.text))}`
   const memDigest = `【工作台事实（已有）】\n${entriesToDigest((snap.memory?.entries || []).map((e) => e.text))}`

@@ -8,7 +8,33 @@
  */
 
 export const LLM_BASE = (process.env.BILI_OP_LLM_BASE || 'http://127.0.0.1:40080/v1').replace(/\/+$/, '')
-const KEY = process.env.OC_API_KEY || process.env.BILI_OP_LLM_KEY || ''
+/** 密钥每次调用动态解析：env 优先，兜底读素材库 config.json 的 llmKey。
+ *  之前在 import 时冻结成 const，宿主进程内调用（复盘/语气改写）在「key 只存 config」的常规配置下永远拿不到（审查 BUG-3）。 */
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+function key() {
+  const env = process.env.OC_API_KEY || process.env.BILI_OP_LLM_KEY
+  if (env) return env
+  const candidates = []
+  if (process.env.BILI_STORE) candidates.push(join(process.env.BILI_STORE, 'config.json'))
+  try {
+    const loc = join(homedir(), '.dsh-bili-workbench', 'location.json')
+    if (existsSync(loc)) {
+      const p = JSON.parse(readFileSync(loc, 'utf8')).store
+      if (p) candidates.push(join(p, 'config.json'))
+    }
+  } catch { /* location 坏了就走默认 */ }
+  candidates.push(join(homedir(), '.dsh-bili-workbench', 'store', 'config.json'))
+  for (const f of candidates) {
+    try {
+      if (!existsSync(f)) continue
+      const k = String(JSON.parse(readFileSync(f, 'utf8')).llmKey || '').trim()
+      if (k) return k
+    } catch { /* 下一个 */ }
+  }
+  return ''
+}
 /** 模型链每次调用时读 env：进程内调用（reflect/语气改写）可能在启动后才设置 BILI_OP_MODELS */
 export function models() {
   return (process.env.BILI_OP_MODELS || 'deepseek-v4.1-flash,big-pickle,glm-5.3-flash')
@@ -21,25 +47,30 @@ export const currentModel = () => {
 }
 
 export function assertKey() {
-  if (!KEY) {
+  const k = key()
+  if (!k) {
     throw new Error(
       '没有模型密钥。设置环境变量 OC_API_KEY，或在工作台「刷B站 → 刷B站设置」里填模型密钥（存到 bili-store/config.json 的 llmKey）。例如：\n' +
       '  $env:OC_API_KEY="..."   # 只在当前终端生效',
     )
   }
 }
+export const currentKey = () => key()
 
 /**
  * 一次对话。返回纯文本。
  * @param {{role:string,content:string}[]} messages
  */
-export async function chat(messages, { maxTokens = 3000, temperature = 0.4, timeoutMs = 180000 } = {}) {
+export async function chat(messages, { maxTokens = 3000, temperature = 0.4, timeoutMs = 180000 } = {}, depth = 0) {
   assertKey()
+  const list = models()
+  if (!list.length) throw new Error('模型链是空的：在「刷B站 → 设置 → 模型链」里至少填一个模型')
+  const KEY = key()
   const tried = []
   const waitMs = Number(process.env.BILI_OP_429_WAIT || 15000)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-  for (let attempt = 0, total = models().length; attempt < total; attempt++) {
+  for (let attempt = 0; attempt < list.length; attempt++) {
     const model = currentModel()
     // 每个模型最多试 2 次（429 限流时退避一次再试，别立刻放弃）
     for (let inner = 0; inner < 2; inner++) {
@@ -66,13 +97,14 @@ export async function chat(messages, { maxTokens = 3000, temperature = 0.4, time
         const j = await res.json()
         const text = j?.choices?.[0]?.message?.content
         // ⚠️ 推理型模型会把 max_tokens 全花在 reasoning 上 ⇒ content 空。
-        //    这不是"模型挂了"，是 token 给少了：**无条件**加倍再试一次（上限 16k）。
+        //    这不是"模型挂了"，是 token 给少了：加倍再试**一次**（depth 守卫：
+        //    之前是无深度限制的递归，弱模型持续空回复会无限循环烧钱，审查 BUG-7）。
         if (!text || !String(text).trim()) {
-          if (inner === 0) {
+          if (inner === 0 && depth < 1) {
             clearTimeout(timer)
             const bigger = Math.min(Math.max(maxTokens * 2, 6000), 16000)
             console.log(`  ${model} 空回复（reasoning 吃光 token）⇒ 加到 ${bigger} 再试`)
-            return await chat(messages, { maxTokens: bigger, temperature, timeoutMs })
+            return await chat(messages, { maxTokens: bigger, temperature, timeoutMs }, depth + 1)
           }
           throw new Error('空回复（可能 max_tokens 被 reasoning 吃光）')
         }
@@ -87,7 +119,7 @@ export async function chat(messages, { maxTokens = 3000, temperature = 0.4, time
         clearTimeout(timer)
       }
     }
-    if (attempt === models().length - 1) {
+    if (attempt === list.length - 1) {
       throw new Error('所有模型都失败了：\n  ' + tried.join('\n  '))
     }
   }
@@ -140,9 +172,10 @@ export async function chatJSON(messages, opts = {}) {
 
 /** 健康检查：能不能连上、哪些模型可用 */
 export async function health() {
-  const out = { base: LLM_BASE, hasKey: Boolean(KEY), models: models(), reachable: false, modelList: [] }
+  const k = key()
+  const out = { base: LLM_BASE, hasKey: Boolean(k), models: models(), reachable: false, modelList: [] }
   try {
-    const r = await fetch(`${LLM_BASE}/models`, { headers: KEY ? { authorization: `Bearer ${KEY}` } : {} })
+    const r = await fetch(`${LLM_BASE}/models`, { headers: k ? { authorization: `Bearer ${k}` } : {} })
     out.reachable = r.ok
     if (r.ok) {
       const j = await r.json()

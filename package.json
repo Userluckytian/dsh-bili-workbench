@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-workbench",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DSH 插件：刷 B站 + 素材库 + AI 出片 + 审核发布 + 自动互动",
   "author": "Userluckytian",
   "repository": {
@@ -38,7 +38,8 @@
     "README.md",
     "LICENSE",
     "NOTICE.md",
-    "CONTRIBUTORS.md"
+    "CONTRIBUTORS.md",
+    "tools"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.1",

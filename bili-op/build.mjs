@@ -13,6 +13,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { makeCover } from './cover.mjs'
+import { pickSfxes } from './sfx.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -75,6 +76,64 @@ function renderRemotion({ renderDir, propsPath, out }) {
   ], { cwd: renderDir })
 }
 
+/**
+ * BGM 选曲：从 assets-src/bgm/index.json 里按主题情绪挑一首。
+ * 挑不到情绪匹配就按标题散列确定性挑一首（同一期片子永远同一首，不会每次重渲换曲）。
+ * 库不在（如插件安装布局）返回 null，调用方退回纯人声。
+ */
+/** 字幕样式库：clean=现状；bold=大黑描边；pop=描边+底杠强调色 */
+const SUBTITLE_STYLES = {
+  clean: 'FontName=Microsoft YaHei,FontSize=13,PrimaryColour=&H00FFFFFF,OutlineColour=&HCC000000,BorderStyle=1,Outline=2,Shadow=0.6,MarginV=26',
+  bold: 'FontName=Microsoft YaHei,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,MarginV=26,Bold=1',
+  pop: 'FontName=Microsoft YaHei,FontSize=13,PrimaryColour=&H0000D7FF,OutlineColour=&H00202020,BorderStyle=1,Outline=3,Shadow=0,MarginV=28',
+}
+
+function pickBgm(script, runDir) {
+  const roots = [
+    process.env.BILI_OP_BGM_DIR,
+    join(HERE, '..', 'assets-src', 'bgm'),        // 项目根布局：bili-op/../assets-src
+    join(HERE, '..', '..', 'assets-src', 'bgm'),  // 插件布局：workbench/bili-op/../../..
+  ].filter(Boolean)
+  let idx = null
+  let dir = ''
+  for (const r of roots) {
+    const f = join(r, 'index.json')
+    if (existsSync(f)) {
+      try { idx = JSON.parse(readFileSync(f, 'utf8')); dir = r } catch { /* 下一个 */ }
+      if (idx) break
+    }
+  }
+  if (!Array.isArray(idx) || !idx.length) return null
+  const usable = idx.filter((x) => x?.file && existsSync(join(dir, x.file)) && (x.duration_seconds || 0) >= 30)
+  if (!usable.length) return null
+
+  // 主题 → 情绪关键词（盘点/热血类要激昂或轻快；悲伤叙事要舒缓/忧伤……）
+  const text = `${script.theme || ''} ${script.title || ''} ${script.subtitle || ''}`
+  const MOODS = ['轻快', '史诗', '紧张', '舒缓', '温馨', '忧伤', '激昂', '梦幻']
+  const RE = {
+    激昂: /热血|燃|战|激|逆袭|爆发|震撼/, 史诗: /史诗|宏大|大戏|时代|传奇/,
+    紧张: /悬|惊|险|对决|争议|翻车|塌/, 轻快: /日常|搞笑|乐|梗|趣味|轻松|盘点/,
+    温馨: /温|治愈|萌|家|朋友/, 忧伤: /别|离|遗憾|泪|怀念/, 舒缓: /慢|静|回忆|淡/,
+    梦幻: /梦|幻|童话|星/,
+  }
+  let want = ''
+  for (const m of MOODS) if (new RegExp(RE[m]).test(text)) { want = m; break }
+  const pool = want ? usable.filter((x) => String(x.mood || '').includes(want)) : []
+  const list = pool.length ? pool : usable
+  // 确定性散列：同一标题稳定选同一首；不同期自然分散
+  const key = `${script.title || ''}#${list.length}`
+  let h = 0
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0
+  const pick = list[h % list.length]
+  const abs = join(dir, pick.file)
+  if (!existsSync(abs)) return null
+  // 落一份出处进 run 目录，审核时能查来源
+  try {
+    writeFileSync(join(runDir, 'bgm.json'), JSON.stringify({ ...pick, pickedMood: want || '(按标题散列)' }, null, 2), 'utf8')
+  } catch { /* 记录失败不影响出片 */ }
+  return { file: abs, title: pick.title || pick.file, mood: pick.mood, license: pick.license || '?' }
+}
+
 async function main() {
   const started = now()
   let runDir = arg('run', '')
@@ -119,11 +178,71 @@ async function main() {
     log(`   渲染耗时 ${((now() - t3) / 60000).toFixed(1)} 分钟 · ${mb(videoRaw)}`)
   }
 
-  // ④ 合音轨
+  // ④ 合音轨（可选 BGM：从素材库按主题选曲，人声进来时自动压低；转场音效自动叠加）
   log('\n④ 合入旁白')
   const videoOut = join(runDir, 'final.mp4')
-  sh('ffmpeg', ['-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
-    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut], { stdio: 'ignore' })
+  const bgm = pickBgm(script, runDir)
+  const sfxes = flag('no-sfx') ? [] : pickSfxes(JSON.parse(readFileSync(propsPath, 'utf8')))
+  log(`   音效：${sfxes.length} 处`)
+  if (bgm && !flag('no-bgm') && sfxes.length) {
+    // sidechaincompress：人声当触发器，BGM 被压低（人声停了 BGM 自动回弹）；音效经 adelay 对齐后一起 amix
+    const sfxInputs = []
+    const sfxFilters = []
+    sfxes.forEach((s, i) => {
+      sfxInputs.push('-i', s.file)
+      const n = 3 + i
+      sfxFilters.push(`[${n}:a]volume=0.8,adelay=${Math.round(s.atSec * 1000)}:all=1[s${i}]`)
+    })
+    const sfxLabels = sfxes.map((_, i) => `[s${i}]`).join('')
+    sh('ffmpeg', [
+      '-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
+      '-stream_loop', '-1', '-i', bgm.file,
+      ...sfxInputs,
+      '-filter_complex',
+      '[2:a]volume=0.22[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=8:release=350[bga];' +
+      sfxFilters.join(';') + ';' +
+      `[1:a][bga]${sfxLabels}amix=inputs=${2 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[aout]`,
+      '-map', '0:v', '-map', '[aout]',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+    ], { stdio: 'ignore' })
+    log(`   BGM：${bgm.title}（${bgm.mood || '?'} · ${bgm.license}）`)
+  } else if (bgm && !flag('no-bgm')) {
+    // sidechaincompress：人声当触发器，BGM 被压低（人声停了 BGM 自动回弹）
+    sh('ffmpeg', [
+      '-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
+      '-stream_loop', '-1', '-i', bgm.file,
+      '-filter_complex',
+      '[2:a]volume=0.22[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=8:release=350[bga];' +
+      '[1:a][bga]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]',
+      '-map', '0:v', '-map', '[aout]',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+    ], { stdio: 'ignore' })
+    log(`   BGM：${bgm.title}（${bgm.mood || '?'} · ${bgm.license}）`)
+  } else if (sfxes.length) {
+    // 无 BGM 但有音效：人声 + 音效 amix
+    const sfxInputs = []
+    const sfxFilters = []
+    sfxes.forEach((s, i) => {
+      sfxInputs.push('-i', s.file)
+      const n = 2 + i
+      sfxFilters.push(`[${n}:a]volume=0.8,adelay=${Math.round(s.atSec * 1000)}:all=1[s${i}]`)
+    })
+    const sfxLabels = sfxes.map((_, i) => `[s${i}]`).join('')
+    sh('ffmpeg', [
+      '-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
+      ...sfxInputs,
+      '-filter_complex',
+      sfxFilters.join(';') + ';' +
+      `[1:a]${sfxLabels}amix=inputs=${1 + sfxes.length}:duration=first:dropout_transition=2:normalize=0[aout]`,
+      '-map', '0:v', '-map', '[aout]',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut,
+    ], { stdio: 'ignore' })
+  } else {
+    if (flag('no-bgm')) log('   （--no-bgm：不加 BGM）')
+    else if (bgm === null) log('   （BGM 库不可用，纯人声。设 BILI_OP_BGM_DIR 指向 assets-src/bgm 可启用）')
+    sh('ffmpeg', ['-y', '-i', videoRaw, '-i', join(runDir, 'voice.mp3'),
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', videoOut], { stdio: 'ignore' })
+  }
   log(`   ${mb(videoOut)}`)
 
   // ⑤ 烧字幕（可选）—— B站 上传用烧死的最保险
@@ -132,10 +251,12 @@ async function main() {
     log('\n⑤ 烧字幕')
     burned = join(runDir, 'final-subbed.mp4')
     const srt = join(runDir, 'subtitles.srt').replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:')
+    const styleKey = ['clean', 'bold', 'pop'].includes(arg('sub-style', '')) ? arg('sub-style') : (SUBTITLE_STYLES[script.subtitleStyle] ? script.subtitleStyle : 'clean')
+    log(`   字幕样式：${styleKey}`)
     sh('ffmpeg', ['-y', '-i', videoOut,
       // ⚠️ libass 默认按 384×288 的 PlayRes 缩放 ⇒ FontSize/MarginV 都是"相对单位"，
       //    给 22/46 会渲成 80px 的大字。13/26 换算到 1080p 约 49px / 98px，正好。
-      '-vf', `subtitles='${srt}':force_style='FontName=Microsoft YaHei,FontSize=13,PrimaryColour=&H00FFFFFF,OutlineColour=&HCC000000,BorderStyle=1,Outline=2,Shadow=0.6,MarginV=26'`,
+      '-vf', `subtitles='${srt}':force_style='${SUBTITLE_STYLES[styleKey]}'`,
       '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-c:a', 'copy', burned], { stdio: 'ignore' })
     log(`   ${mb(burned)}`)
   }

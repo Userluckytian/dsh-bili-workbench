@@ -1,6 +1,30 @@
 # Changelog
 
+## 1.1.0 — 2026-10-24
+
+成片从"静态画面+字幕"升级到**有素材、有动势、有声音设计**，记忆系统全量修复：
+
+### 渲染升级（消灭 PPT 感）
+- **转场/动效**：分镜新增 `transition`（slide/blinds/wipe/zoom/dissolve/fade 六种入场）与 `effect`（kenburns 推近 / shake / pulse 持续动效）；模型可挑，不填则确定性轮换
+- **音效轨**：转场自动配 Kenney CC0 音效（按类型映射，`--no-sfx` 可关）；混音 amix normalize=0 修复（否则多路输入人声被 1/N 衰减）
+- **BGM 自动选曲**：从素材库按主题情绪匹配（100 首，含许可字段），sidechaincompress 人声触发自动压低；出处落 bgm.json 供审核
+- **字幕样式库**：clean / bold / pop 三套（`--sub-style` 或方案 `subtitleStyle` 切换）
+- **形象图层**：右下角透明 PNG 形象（浮动+弹跳入场），`mascot:false` 可关
+- **真视频 B-roll**：item 镜可引用已裁剪的真实片段（Remotion Video 播放），静帧自动降级；配套 `engine/clip.mjs`：yt-dlp 按 BV+秒数裁片段入库（幂等、含来源/许可索引）
+- **双角色小剧场**：新镜头类型 `scene`——两角色 + 对话气泡随说话人左右切换；方案生成可自动写台词（每期限 1 个）、自动引用已裁剪片段
+
+### 记忆系统：代码审查修复 11 个 bug
+- P0：batch 回滚损坏记忆（快照整恢复）；并发写事件流互相覆盖（进目录锁 + 原子重写）
+- P1：宿主内复盘读不到 config 密钥（key 动态解析）；复盘并发双跑（互斥+占坑）；召回围栏可被注入闭合标签击穿（拼行消毒）；patch 分隔符分裂条目；LLM 空回复无限递归（深度守卫）
+- P2：模型链空数组显式报错；无 stamp 死锁自愈（mtime）；pending 并发复活；回滚乱序
+- 其余：模型链/密钥改为每次调用动态解析；复盘失败不再静默
+
+### 其他
+- 工具：`tools/cutout.mjs`（rembg 本地抠图→透明 PNG）、`tools/fetch-emotes.mjs`（B站官方表情包收集）
+- 评论区带图：`bili comment post --image` 端到端验证可用
+
 ## 1.0.0 — 2026-10-24
+
 
 记忆系统完整版（M1 + M2 + M3）：
 
