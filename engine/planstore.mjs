@@ -152,6 +152,7 @@ export function listProjects() {
   if (!existsSync(plansDir())) return []
   const out = []
   for (const name of readdirSync(plansDir())) {
+    if (name.startsWith('.tmp-')) continue // 原子写的临时文件，不是项目
     const p = join(plansDir(), name)
     if (statSync(p).isDirectory()) {
       const project = getProject(name)

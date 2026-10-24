@@ -17,14 +17,15 @@ export async function voiceOwnerStats(facts, { persona = '', maxChars = 120, own
   if (!text || !p) return text
   const call = String(ownerCall || '老弟').trim() || '老弟'
 
-  const need = [...new Set(numsOf(text))]
+  const need = numsOf(text)
+  const needUniq = [...new Set(need)]
   const system = `你的说话身份如下：
 ${p}
 
 现在把一条已经算好的事实答复改写成符合这个身份的口语回复。
 硬性要求：
 - 称呼对方用「${call}」（账号设置里的称呼，优先于人设里的默认称呼）。
-- 所有数字、时段、单位必须原样保留：${need.length ? need.join('、') : '无'}，一个都不能改、不能省、不能新增。
+- 所有数字、时段、单位必须原样保留：${needUniq.length ? needUniq.join('、') : '无'}，一个都不能改、不能省、不能新增。
 - 用阿拉伯数字照抄，不要写成汉字数字。
 - 不能新增事实，不能夸大或缩小。
 - 不超过 ${maxChars} 个汉字。
@@ -36,7 +37,7 @@ ${p}
         { role: 'system', content: system },
         {
           role: 'user',
-          content: `事实答复：${text}\n必须原样出现的数字：${need.join('、') || '（无）'}\n`
+          content: `事实答复：${text}\n必须原样出现的数字：${needUniq.join('、') || '（无）'}\n`
             + (attempt ? '上一次改写数字对不上，这次只改语气，数字一个都不要动。' : '请改写。'),
         },
       ], { maxTokens: 260, temperature: attempt === 0 ? 0.7 : 0.25 })
@@ -46,10 +47,13 @@ ${p}
       if (!clean || clean.length > maxChars + 20) continue
       const got = numsOf(clean)
       // “1 条”写成“一条”不算丢事实；真正要防的是把 48/42/3 这类数字说错
-      const strictNeed = need.filter((n) => Number(n) !== 1)
-      const missing = strictNeed.filter((n) => !got.includes(n))
-      const extra = got.filter((n) => !need.includes(n) && Number(n) !== 1)
-      if (missing.length || extra.length) continue
+      // 多重集严格比对：排序后逐元素全等，防止调换顺序（如 48/42 → 42/48）或重复次数被改
+      const byNum = (a, b) => Number(a) - Number(b)
+      const strictNeed = need.filter((n) => Number(n) !== 1).sort(byNum)
+      const strictGot = got.filter((n) => Number(n) !== 1).sort(byNum)
+      const same = strictNeed.length === strictGot.length
+        && strictNeed.every((n, i) => strictGot[i] === n)
+      if (!same) continue
       return clean
     } catch { /* 失败就退回原句 */ }
   }

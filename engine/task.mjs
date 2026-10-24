@@ -17,7 +17,7 @@
  * 默认 5 天到期，每 3 小时找一轮；不会自动渲染、不会自动投稿。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { list, STORE } from './store.mjs'
@@ -180,7 +180,8 @@ function snapshot(task, found) {
 /* ───────────── ③ 写方案 ───────────── */
 
 function writePlan(task, found) {
-  const tmp = join(STORE, 'plans', `.tmp-task-${task.id}-${Date.now()}.json`)
+  const tmp = join(STORE, 'tmp', `.tmp-task-${task.id}-${Date.now()}.json`)
+  mkdirSync(join(STORE, 'tmp'), { recursive: true })
   const bvs = found.slice(0, 40).map((x) => x.rec.bvid).join(',')
   log(`素材够了（${found.length} 条），开始写方案…`)
   process.env.BILI_OP_SELF_VIDEOS = canon.renderBlock(task.brief || task.topic || '', { picks: 3 })
@@ -209,6 +210,12 @@ async function runTask(task, { checkOnly = false } = {}) {
   if (!task) return
   const cfg = readJson(join(STORE, 'config.json'), {})
   const id = task.id
+  // 每次写状态前复检：主人可能刚点了暂停，别把 paused 覆盖掉
+  const pausedNow = () => {
+    const cur = tasks.get(id)
+    if (!cur || cur.status === 'paused') { log('任务已被暂停，停止本轮'); return true }
+    return false
+  }
   const deadline = Date.parse(task.deadline || '')
   if (Number.isFinite(deadline) && Date.now() > deadline && task.status !== 'ready') {
     tasks.update(id, { status: 'failed', lastError: `${task.maxDays || 5} 天内没凑够素材` })
@@ -218,6 +225,7 @@ async function runTask(task, { checkOnly = false } = {}) {
     return
   }
 
+  if (pausedNow()) return
   tasks.update(id, { status: 'checking', attempts: (task.attempts || 0) + 1, lastError: '' })
   tasks.addLog(id, checkOnly ? '检查素材库' : '检查素材库…')
   task = tasks.get(id)
@@ -234,11 +242,13 @@ async function runTask(task, { checkOnly = false } = {}) {
   log(`库里相关且可用：${found.length} 条（需要 ${task.needed} 条）`)
 
   if (found.length >= task.needed) {
+    if (pausedNow()) return
     tasks.update(id, { status: 'planning' })
     tasks.addLog(id, `素材够了（${found.length} 条），开始写方案`)
     let r
     try { r = writePlan(task, found) } catch (e) { r = { ok: false, error: String(e?.message ?? e) } }
     if (r.ok) {
+      if (pausedNow()) return
       tasks.update(id, {
         status: 'ready', projectId: r.project.id, planTitle: r.plan.title || r.project.title,
         matched: found.length, nextRunAt: '',
@@ -246,6 +256,7 @@ async function runTask(task, { checkOnly = false } = {}) {
       tasks.addLog(id, `方案已生成：${r.plan.title}`)
       log(`✓ 任务 ${id} 方案已生成：${r.project.id} / ${r.plan.title}`)
     } else {
+      if (pausedNow()) return
       tasks.update(id, {
         status: 'queued', lastError: r.error,
         nextRunAt: new Date(Date.now() + task.intervalMinutes * 60_000).toISOString(),
@@ -257,6 +268,7 @@ async function runTask(task, { checkOnly = false } = {}) {
   }
 
   if (checkOnly) {
+    if (pausedNow()) return
     tasks.update(id, {
       status: 'short', lastError: '素材不足',
       nextRunAt: new Date(Date.now() + task.intervalMinutes * 60_000).toISOString(),
@@ -266,6 +278,7 @@ async function runTask(task, { checkOnly = false } = {}) {
   }
 
   // 不够 → 逛 B站
+  if (pausedNow()) return
   tasks.update(id, { status: 'collecting' })
   const queries = task.queries?.length ? task.queries : buildQueries(task)
   const rounds = Math.min(2, Math.max(1, queries.length - (task.queryIdx || 0)))
@@ -273,6 +286,7 @@ async function runTask(task, { checkOnly = false } = {}) {
   let qIdx = task.queryIdx || 0
 
   for (let i = 0; i < rounds; i++) {
+    if (pausedNow()) return
     const q = queries[qIdx % queries.length]
     qIdx = (qIdx + 1) % queries.length
     tasks.update(id, { queryIdx: qIdx })
@@ -294,6 +308,7 @@ async function runTask(task, { checkOnly = false } = {}) {
   }
 
   found = findMaterial(task)
+  if (pausedNow()) return
   const snap = snapshot(task, found)
   const enough = found.length >= task.needed
   tasks.update(id, {

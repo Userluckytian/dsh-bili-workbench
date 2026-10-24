@@ -165,8 +165,8 @@ export function rangeProgress(str, d = new Date()) {
   let total = 0, elapsed = 0, inWindow = false
   for (const s of segs) {
     total += Math.max(0, s.end - s.start)
-    if (cur >= s.end) elapsed += s.end - s.start
-    else if (cur > s.start) elapsed += cur - s.start
+    if (cur < s.start) continue // 没到的段（含跨零点拆出的次日段）不算已过
+    elapsed += cur >= s.end ? s.end - s.start : cur - s.start
     if (cur >= s.start && cur < s.end) inWindow = true
   }
   return { total, elapsed, inWindow }
@@ -516,11 +516,13 @@ function startRender(project, plan, version, voice) {
       job.stage = 'done'
       job.pct = 100
       const st = renders.readStatus(runId)
-      project.stage = 'rendered'
-      project.runDir = runDir
-      project.renderVersion = job.version
-      project.review = null
-      plans.saveProject(project)
+      // 取最新项目再 patch：渲染期间主人可能改过版，不能用闭包里的旧 project 整体覆盖
+      const fresh = plans.getProject(project.id) || project
+      fresh.stage = 'rendered'
+      fresh.runDir = runDir
+      fresh.renderVersion = job.version
+      fresh.review = null
+      plans.saveProject(fresh)
       memory.addEvent('render', { runId, projectId: project.id, text: `渲染《${plan.title || project.id}》成功，${st?.seconds || '?'} 秒成片已出` })
       log(`出片完成 ${runId}（${st?.seconds || '?'} 秒，真实帧 ${frameCount}）`)
       runReflect()
@@ -529,8 +531,9 @@ function startRender(project, plan, version, voice) {
     } else {
       job.stage = 'failed'
       job.error = job.log.slice(-1200) || ('退出码 ' + code)
-      project.stage = 'draft'
-      plans.saveProject(project)
+      const fresh = plans.getProject(project.id) || project
+      fresh.stage = 'draft'
+      plans.saveProject(fresh)
       memory.addEvent('render', { runId, projectId: project.id, ok: false, text: `渲染《${plan.title || project.id}》失败：${job.error.slice(0, 60)}` })
       log(`出片失败 ${runId}（退出码 ${code}）`)
       runReflect()
@@ -825,7 +828,8 @@ export function apply(ctx) {
       const body = await readBody(req)
       const brief = String(body.brief || '').trim().slice(0, 300)
       if (!brief) return sendJson(res, 200, { ok: false, error: '先写一句你想做什么样的片子' })
-      const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
+      let tmp = join(STORE, 'tmp', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
+      mkdirSync(join(STORE, 'tmp'), { recursive: true })
       const args = [brief, '--out', tmp]
       if (body.limit) args.push('--limit', String(Math.min(Number(body.limit) || 40, 120)))
       const r = await runEngine('plan.mjs', args, 10 * 60_000, {
@@ -853,6 +857,7 @@ export function apply(ctx) {
       if (!instruction) return sendJson(res, 200, { ok: false, error: '先说一句要改什么' })
       const project = plans.getProject(id)
       if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      if (activeJob(id)) return sendJson(res, 200, { ok: false, error: '这个项目正在渲染，等渲染完再改版' })
       const prevPlan = plans.getVersion(id, project.currentVersion)
       if (!prevPlan) return sendJson(res, 200, { ok: false, error: '当前版本读不到' })
       // 旧格式（plans/<时间>.json）没有项目目录：先复制成一个新项目再改版
@@ -864,7 +869,8 @@ export function apply(ctx) {
       } else if (!existsSync(prevFile)) {
         writeJson(prevFile, prevPlan)
       }
-      const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
+      const tmp = join(STORE, 'tmp', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
+      mkdirSync(join(STORE, 'tmp'), { recursive: true })
       const r = await runEngine('plan.mjs', ['--revise', prevFile, '--instruction', instruction, '--out', tmp], 10 * 60_000, {
         BILI_OP_SELF_VIDEOS: canon.renderBlock(instruction),
         BILI_OP_MEMORY_QUERY: instruction,
@@ -1237,7 +1243,7 @@ export function apply(ctx) {
         } catch { /* 下面统一报错 */ }
         if (!text) return sendJson(res, 200, { ok: false, error: '生成失败（看日志）', log: logText })
       }
-      const cap = interact.checkCap(kind, cfg)
+      const cap = await interact.checkCap(kind, cfg)
       return sendJson(res, 200, { ok: true, text, model, cap, kind })
     }
     if (req.method === 'POST' && path === '/interact/send') {
@@ -1247,7 +1253,7 @@ export function apply(ctx) {
       const cfg = loadCfg()
       const text = String(body.text || '').trim().slice(0, 500)
       if (!text) return sendJson(res, 200, { ok: false, error: '没有内容' })
-      const cap = interact.checkCap(kind, cfg)
+      const cap = await interact.checkCap(kind, cfg)
       if (cap) return sendJson(res, 200, { ok: false, error: cap })
       if (body.confirm !== true) return sendJson(res, 200, { ok: false, error: '需要二次确认' })
 
@@ -1274,9 +1280,9 @@ export function apply(ctx) {
 
       const r = await runBili(args, { timeoutMs: 60000 })
       if (r.ok && !dryRun) {
-        if (kind === 'comment') interact.markComment(body.bv, { text })
-        if (kind === 'reply') interact.markReply(body.rpid, { text })
-        if (kind === 'dm') interact.markDm(body.uid || cfg.dmUid, { text })
+        if (kind === 'comment') await interact.markComment(body.bv, { text })
+        if (kind === 'reply') await interact.markReply(body.rpid, { text })
+        if (kind === 'dm') await interact.markDm(body.uid || cfg.dmUid, { text })
         const what = kind === 'comment' ? '评论了' : kind === 'reply' ? '回复了' : '私信了'
         memory.addEvent(kind === 'dm' ? 'dm' : kind, {
           bv: body.bv || '', text: `${what}《${String(body.title || body.bv || '').slice(0, 26)}》：${text.slice(0, 46)}`,

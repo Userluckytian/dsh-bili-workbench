@@ -525,4 +525,4 @@ export function rememberIntent(raw) {
   return m ? m[2].trim() : null
 }
 
-export { BLOCKED_TEXT }
+export { BLOCKED_TEXT, withLock }

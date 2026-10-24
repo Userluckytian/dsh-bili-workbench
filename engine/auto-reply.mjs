@@ -155,7 +155,7 @@ async function main() {
     const res = runBili(args, { timeoutMs: 60000 })
     if (res.ok) {
       if (!dryRun) {
-        interact.markReply(m.rpid, { text })
+        await interact.markReply(m.rpid, { text })
         addEvent('reply', { bv: m.on?.bvid || '', rpid: m.rpid, text: `回复了《${String(m.on?.title || '').slice(0, 26)}》下的评论：${text.slice(0, 46)}` })
       }
       ok++

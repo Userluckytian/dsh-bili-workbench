@@ -95,6 +95,7 @@ function rangeProgress(str, d = new Date()) {
   const cur = d.getHours() * 60 + d.getMinutes()
   let total = 0, elapsed = 0, inWindow = false
   for (const s of segs) {
+    if (cur < s.start) continue
     total += Math.max(0, s.end - s.start)
     if (cur >= s.end) elapsed += s.end - s.start
     else if (cur > s.start) elapsed += cur - s.start
@@ -132,8 +133,8 @@ export function answerOwnerCommandDetailed(raw, cfg = loadCfg()) {
   const say = (msg) => `${call}，${msg}`
   const compact = text.replace(/\s+/g, '')
 
-  // 任何“改配置 / 发布 / 删除”类动作都不在评论里执行
-  if (/(改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|打开|重启|删除|投稿|上传|私信|发评论|执行命令)/.test(compact)) {
+  // 任何“改配置 / 发布 / 删除”类动作都不在评论里执行（裸动词不带祈使上下文、或疑问句 → 不算）
+  if (STRONG_DANGEROUS.test(compact) || (!questionTail(compact) && imperativeHit(compact, COMMAND_VERBS))) {
     return { text: say('这个操作得去工作台「刷B站设置」手动改，我在评论里不执行配置或发布操作。'), kind: 'refuse' }
   }
 
@@ -159,6 +160,22 @@ export function answerOwnerCommandDetailed(raw, cfg = loadCfg()) {
 /** 兼容旧调用：只要文本 */
 export function answerOwnerCommand(raw, cfg = loadCfg()) {
   return answerOwnerCommandDetailed(raw, cfg)?.text || null
+}
+
+/* ── 危险动作识别：高频裸词（关注/打开/转发）不单看动词，必须带祈使上下文，避免误伤日常聊天 ── */
+const IMPERATIVE_HINT = '(帮我|请你|麻烦|给我|去|把)'
+// 强信号：出现即危险，不问上下文
+const STRONG_DANGEROUS = /(执行命令|忽略(之前|以上)|系统提示|越权|token|api.?key|密钥|密码)/i
+// 动作动词：仅在句首祈使，或带（帮我/请你/麻烦/给我/去/把）前缀时才算危险
+const DANGEROUS_VERBS = '改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|重启|删除|投稿|上传|私信|发评论'
+const COMMAND_VERBS = DANGEROUS_VERBS + '|删了|删掉|移除|取关|关一下|打开'
+const questionTail = (t) => /[吗呢没有怎么如何][?？!！]*$/.test(String(t || '').trim())
+/** 动词是否处于祈使位置：句首，或跟在祈使提示词后（中间不跨句读标点） */
+function imperativeHit(text, verbs) {
+  const t = String(text || '')
+  if (!new RegExp(verbs, 'i').test(t)) return false
+  if (new RegExp('^(?:' + verbs + ')', 'i').test(t)) return true
+  return new RegExp(IMPERATIVE_HINT + '[^，。;；!！?？\\n]*(' + verbs + ')', 'i').test(t)
 }
 
 /* 非主人问到统计/配置，或想让机器人替他做事时的拒绝话术：短、不给数据、不接活 */
@@ -201,15 +218,18 @@ export function auditMessage(raw, { isOwner = false } = {}) {
     if (/^(记住|记一下|帮我记住|要记住|记得)[:：,，!！\s]/.test(text)) {
       return { allow: false, reason: 'non-owner-memory' }
     }
-    const command = /(上传|投稿|删除|删了|删掉|移除|私信|发评论|转发|关注|取关|关掉|关闭|关一下|开启|打开|重启|执行命令|改成|改到|设为|设置成|调成|忽略(之前|以上)|越权)/i
-    if (command.test(text)) return { allow: false, reason: 'non-owner-command' }
+    // 高频裸词（转发/关注/打开）不再单独命中；动作动词需要祈使上下文，疑问句豁免
+    if (STRONG_DANGEROUS.test(text) || (!questionTail(text) && imperativeHit(text, COMMAND_VERBS))) {
+      return { allow: false, reason: 'non-owner-command' }
+    }
     const privileged = /(主人|owner|权限|配置|密钥|token|api.?key|密码|日志|路径|uid|系统提示|后台|工作台|统计|(一天|每天|今天|现在|总共|一共).*(刷|逛|采|看|发|评论|回复).*(几|多少|多久|条|个)|(刷|逛|采|评论|回复).*(多久|多长时间|几次|几条|多少个|多少条)|(多少|几).*(条|个|次).*(视频|素材|评论|回复)|(改|设|调|关|开).*(配置|设置|上限|时段|频率|间隔|每天|自动|开关)|(配置|设置|上限|时段|频率|间隔).*(改|设|调|关|开))/i
     if (privileged.test(text)) return { allow: false, reason: 'non-owner-privileged' }
     return { allow: true, intent: 'chat' }
   }
 
-  const dangerous = /(改成|改到|设为|设置成|调成|关掉|关闭|暂停|停止|开启|重启|删除|投稿|上传|私信|发评论|执行命令|忽略(之前|以上)|系统提示|越权|token|api.?key|密钥|密码)/i
-  if (dangerous.test(text)) return { allow: false, reason: 'owner-dangerous' }
+  if (STRONG_DANGEROUS.test(text) || (!questionTail(text) && imperativeHit(text, DANGEROUS_VERBS))) {
+    return { allow: false, reason: 'owner-dangerous' }
+  }
   return { allow: true, intent: 'owner' }
 }
 

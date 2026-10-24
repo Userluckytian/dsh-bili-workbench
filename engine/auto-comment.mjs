@@ -127,7 +127,7 @@ async function main() {
     const r = runBili(args, { timeoutMs: 60000 })
     if (r.ok) {
       if (!dryRun) {
-        interact.markComment(rec.bvid, { rpid: r.data?.rpid || 0, text })
+        await interact.markComment(rec.bvid, { rpid: r.data?.rpid || 0, text })
         addEvent('comment', { bv: rec.bvid, text: `评论了《${String(rec.title).slice(0, 30)}》：${text.slice(0, 50)}` })
       }
       ok++

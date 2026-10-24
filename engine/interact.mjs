@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { STORE } from './store.mjs'
+import { withLock } from './memory.mjs'
 
 const file = () => join(STORE, 'interactions.json')
 const EMPTY = { daily: {}, commented: {}, replied: {}, dm: {} }
@@ -53,41 +54,50 @@ function bump(db, kind) {
   db.daily[day][kind] = (db.daily[day][kind] || 0) + 1
 }
 
+// 写操作全部走 withLock（<store>/memory/.lock 目录锁，跨进程互斥），避免并发 load→改→save 丢更新
 export function markComment(bv, { rpid = 0, text = '' } = {}) {
-  const db = load()
-  db.commented[String(bv)] = { at: new Date().toISOString(), rpid, text: String(text).slice(0, 200) }
-  bump(db, 'comments')
-  return save(db)
+  return withLock(async () => {
+    const db = load()
+    db.commented[String(bv)] = { at: new Date().toISOString(), rpid, text: String(text).slice(0, 200) }
+    bump(db, 'comments')
+    return save(db)
+  })
 }
 
 export function markReply(rpid, { text = '' } = {}) {
-  const db = load()
-  db.replied[String(rpid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
-  bump(db, 'replies')
-  return save(db)
+  return withLock(async () => {
+    const db = load()
+    db.replied[String(rpid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
+    bump(db, 'replies')
+    return save(db)
+  })
 }
 
 export function markDm(uid, { text = '' } = {}) {
-  const db = load()
-  db.dm[String(uid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
-  bump(db, 'dms')
-  return save(db)
+  return withLock(async () => {
+    const db = load()
+    db.dm[String(uid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
+    bump(db, 'dms')
+    return save(db)
+  })
 }
 
 /** 发之前检查上限；返回 null 表示可以发，否则返回原因 */
 export function checkCap(kind, cfg) {
-  const c = dayCounts()
-  if (kind === 'comment') {
-    const cap = Math.max(0, Number(cfg.perDay) || 0)
-    if (cap > 0 && c.comments >= cap) return `今天的评论上限已到（${c.comments}/${cap}）`
-  }
-  if (kind === 'reply') {
-    const cap = Math.max(0, Number(cfg.replyPerDay) || 0)
-    if (cap > 0 && c.replies >= cap) return `今天的回复上限已到（${c.replies}/${cap}）`
-  }
-  if (kind === 'dm') {
-    const cap = Math.max(0, Number(cfg.dmReplyPerDay) || 0)
-    if (cap > 0 && c.dms >= cap) return `今天的私信上限已到（${c.dms}/${cap}）`
-  }
-  return null
+  return withLock(async () => {
+    const c = dayCounts()
+    if (kind === 'comment') {
+      const cap = Math.max(0, Number(cfg.perDay) || 0)
+      if (cap > 0 && c.comments >= cap) return `今天的评论上限已到（${c.comments}/${cap}）`
+    }
+    if (kind === 'reply') {
+      const cap = Math.max(0, Number(cfg.replyPerDay) || 0)
+      if (cap > 0 && c.replies >= cap) return `今天的回复上限已到（${c.replies}/${cap}）`
+    }
+    if (kind === 'dm') {
+      const cap = Math.max(0, Number(cfg.dmReplyPerDay) || 0)
+      if (cap > 0 && c.dms >= cap) return `今天的私信上限已到（${c.dms}/${cap}）`
+    }
+    return null
+  })
 }
