@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chatJSON, health, MODELS, chat } from './llm.mjs'
+import { chatJSON, health, models, chat } from './llm.mjs'
 import { SYSTEM, userPrompt } from './prompts.mjs'
 import { hotTitles } from './bili.mjs'
 
@@ -122,7 +122,7 @@ async function main() {
   }
 
   console.log(`主题：${theme}`)
-  console.log(`模型：${MODELS.join(' → ')}（失败自动换下一个）`)
+  console.log(`模型：${models().join(' → ')}（失败自动换下一个）`)
   const t0 = Date.now()
   const { json, model, usage } = await chatJSON(
     [{ role: 'system', content: SYSTEM }, { role: 'user', content: userPrompt({ theme, date: today(), tone, count }) }],

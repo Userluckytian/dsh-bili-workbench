@@ -25,6 +25,7 @@ import { createProject } from './planstore.mjs'
 import * as tasks from './taskstore.mjs'
 import { loadLLM } from './llmpath.mjs'
 import * as canon from './canon.mjs'
+import * as memory from './memory.mjs'
 
 const { chatJSON } = await loadLLM()
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -183,6 +184,14 @@ function writePlan(task, found) {
   const bvs = found.slice(0, 40).map((x) => x.rec.bvid).join(',')
   log(`素材够了（${found.length} 条），开始写方案…`)
   process.env.BILI_OP_SELF_VIDEOS = canon.renderBlock(task.brief || task.topic || '', { picks: 3 })
+  // 经历召回：把「前两天看过的/做过的」按题材想起来，喂给方案生成
+  const recall = memory.renderRecallBlock(`${task.brief || ''} ${task.topic || ''}`, { k: 6 })
+  process.env.BILI_OP_MEMORY_QUERY = task.brief || task.topic || ''
+  if (recall) {
+    const n = recall.split('\n').filter((l) => l.startsWith('- ')).length
+    tasks.addLog(task.id, `想起 ${n} 条相关经历，已带给方案生成`)
+    log(`想起 ${n} 条相关经历`)
+  }
   const r = runNode('plan.mjs', [task.brief, '--out', tmp, '--limit', '40', '--bvs', bvs], 10 * 60_000)
   const plan = readJson(tmp, null)
   try { unlinkSync(tmp) } catch { /* 已删 */ }
@@ -204,6 +213,7 @@ async function runTask(task, { checkOnly = false } = {}) {
   if (Number.isFinite(deadline) && Date.now() > deadline && task.status !== 'ready') {
     tasks.update(id, { status: 'failed', lastError: `${task.maxDays || 5} 天内没凑够素材` })
     tasks.addLog(id, `到期：${task.maxDays || 5} 天内没凑够素材，任务停止`)
+    memory.addEvent('task', { id, text: `任务「${String(task.brief).slice(0, 30)}」${task.maxDays || 5} 天没凑够素材，已停止` })
     log(`任务 ${id} 到期，未凑够素材`)
     return
   }

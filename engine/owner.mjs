@@ -175,7 +175,11 @@ const REFUSE_ACTION = [
 
 /** 非主人越权时的固定回复：按内容稳定挑一句，同一个人反复问不会来回变 */
 export function refusalText(raw, reason = 'non-owner-privileged') {
-  const pool = reason === 'non-owner-command' ? REFUSE_ACTION : REFUSE_DATA
+  const pool = reason === 'non-owner-command'
+    ? REFUSE_ACTION
+    : reason === 'non-owner-memory'
+      ? ['谢谢你的建议，但我只记主人的话哈～', '这个我记不了，主人才说了算～', '小脑袋记不了这么多，主人的话我才记～']
+      : REFUSE_DATA
   const s = String(raw || '')
   let n = 0
   for (let i = 0; i < s.length; i++) n = (n * 31 + s.charCodeAt(i)) >>> 0
@@ -193,6 +197,10 @@ export function auditMessage(raw, { isOwner = false } = {}) {
   if (!text) return { allow: false, reason: 'empty' }
 
   if (!isOwner) {
+    // 普通人说「记住…」：记忆永远不收陌生人的内容，礼貌拒绝
+    if (/^(记住|记一下|帮我记住|要记住|记得)[:：,，!！\s]/.test(text)) {
+      return { allow: false, reason: 'non-owner-memory' }
+    }
     const command = /(上传|投稿|删除|删了|删掉|移除|私信|发评论|转发|关注|取关|关掉|关闭|关一下|开启|打开|重启|执行命令|改成|改到|设为|设置成|调成|忽略(之前|以上)|越权)/i
     if (command.test(text)) return { allow: false, reason: 'non-owner-command' }
     const privileged = /(主人|owner|权限|配置|密钥|token|api.?key|密码|日志|路径|uid|系统提示|后台|工作台|统计|(一天|每天|今天|现在|总共|一共).*(刷|逛|采|看|发|评论|回复).*(几|多少|多久|条|个)|(刷|逛|采|评论|回复).*(多久|多长时间|几次|几条|多少个|多少条)|(多少|几).*(条|个|次).*(视频|素材|评论|回复)|(改|设|调|关|开).*(配置|设置|上限|时段|频率|间隔|每天|自动|开关)|(配置|设置|上限|时段|频率|间隔).*(改|设|调|关|开))/i

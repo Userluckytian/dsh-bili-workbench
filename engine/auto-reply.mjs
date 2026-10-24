@@ -18,6 +18,7 @@ import { composeText } from './compose-lib.mjs'
 import { ownerInfo, answerOwnerCommandDetailed, auditMessage, refusalText, todayStats } from './owner.mjs'
 import { voiceOwnerStats } from './owner-voice.mjs'
 import * as canon from './canon.mjs'
+import { rememberIntent, apply as memoryApply, addEvent, renderRecallBlock } from './memory.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -95,6 +96,15 @@ async function main() {
         continue
       }
     } else if (own) {
+      // 主人说「记住…」：写进长期记忆 USER.md（仍过注入扫描；重复会自动去重）
+      const remember = rememberIntent(m.content)
+      if (remember) {
+        const r = await memoryApply({ target: 'user', action: 'add', content: remember }, { source: 'owner-comment' })
+        if (r.ok && !r.deduped) addEvent('remember', { text: `主人让我记住：${remember.slice(0, 50)}` })
+        text = r.ok
+          ? `${owner.call}，${r.deduped ? '这条已经记住过啦' : '记住了'}：${remember.slice(0, 40)}`
+          : `${owner.call}，这条没记住（${String(r.error || '').split('\n')[0].slice(0, 40)}）`
+      } else {
       const cmd = answerOwnerCommandDetailed(m.content)
       if (cmd) {
         // 数据由本地脚本算好，再按人设改写；数字对不上会自动退回原句
@@ -116,6 +126,7 @@ async function main() {
           continue
         }
       }
+      }
     } else {
       try {
         const c = await composeText('reply', {
@@ -123,6 +134,7 @@ async function main() {
           replyingTo: m.replying_to || '',
           video: m.on?.title || '',
           selfVideos: canon.renderBlock(m.content || m.on?.title || '', { picks: 2 }),
+          memoryRecall: renderRecallBlock(m.on?.title || m.content || '', { k: 3 }),
         }, persona)
         text = c.text
       } catch (e) {
@@ -140,7 +152,10 @@ async function main() {
     if (m.root) args.push('--root', String(m.root))
     const res = runBili(args, { timeoutMs: 60000 })
     if (res.ok) {
-      if (!dryRun) interact.markReply(m.rpid, { text })
+      if (!dryRun) {
+        interact.markReply(m.rpid, { text })
+        addEvent('reply', { bv: m.on?.bvid || '', rpid: m.rpid, text: `回复了《${String(m.on?.title || '').slice(0, 26)}》下的评论：${text.slice(0, 46)}` })
+      }
       ok++
       log(`  ✓ ${m.rpid} ${dryRun ? 'dry-run' : '已回复'}${own ? '（主人）' : ''}：${text}`)
     } else {

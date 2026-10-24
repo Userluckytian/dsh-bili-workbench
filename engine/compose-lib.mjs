@@ -3,6 +3,7 @@
  * （compose.mjs 是它的命令行外壳；自动评论/自动回复也直接 import 这里）
  */
 import { loadLLM } from './llmpath.mjs'
+import { renderBlock as memoryBlock } from './memory.mjs'
 
 const { chat, assertKey } = await loadLLM()
 
@@ -17,6 +18,10 @@ export async function composeText(kind, ctx = {}, persona = '') {
     .map((c) => String(c || '').trim()).filter(Boolean)
   const callText = calls.map((c) => `「${c}」`).join('、')
   const selfVideos = String(ctx.selfVideos || '').trim()
+  // 长期记忆（USER.md / MEMORY.md）：排在身份/关系之后、任务上下文之前
+  const memory = memoryBlock()
+  // 经历召回（<memory-context> 围栏）：跟这条视频/话题相关的过往经历
+  const recall = String(ctx.memoryRecall || '').trim()
 
   // 身份在最前定调；关系、自己的视频、能力边界、输出要求依次跟在后面。
   // 「谁在用这个号」和「用什么人格说话」是两件事，不要混成一句。
@@ -32,7 +37,7 @@ export async function composeText(kind, ctx = {}, persona = '') {
   const tone = k === 'owner'
     ? '- 像真人说话，不要客服腔；只回答主人问的内容，不知道就说不知道'
     : '- 说人话，像真人随手打的，不要客服腔、不要「感谢分享」这种套话'
-  const system = [identity, scene, selfVideos, boundary,
+  const system = [identity, scene, memory, recall, selfVideos, boundary,
     `【输出要求】\n- 不超过 ${LIMITS[k]} 个汉字\n${tone}\n- 只输出正文，不要引号、不要解释`,
   ].filter(Boolean).join('\n\n')
 

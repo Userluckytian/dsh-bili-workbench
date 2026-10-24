@@ -28,6 +28,8 @@ import * as tasks from './engine/taskstore.mjs'
 import { answerOwnerCommandDetailed, auditMessage, refusalText, mentionTargets, callNames } from './engine/owner.mjs'
 import { voiceOwnerStats } from './engine/owner-voice.mjs'
 import * as canon from './engine/canon.mjs'
+import * as memory from './engine/memory.mjs'
+import { runReflect } from './engine/reflect.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ENGINE = join(HERE, 'engine')
@@ -68,6 +70,12 @@ const DEFAULTS = {
   selfVideosUrl: '',             // 合集链接，如 https://space.bilibili.com/<mid>/lists/<seasonId>
   selfVideosRefreshHours: 24,
   reportLevel: 'full',           // full | brief | off
+  /* 记忆（策展式长期记忆）：USER.md 主人偏好 / MEMORY.md 工作台事实 */
+  memoryEnabled: true,
+  userCharLimit: 1375,
+  memoryCharLimit: 2200,
+  reflectEnabled: true,          // 任务后自动复盘：从经历里提炼主人习惯写进记忆
+  memoryEventsMax: 800,          // 经验事件流保留条数（90 天过期）
   favFolderId: '',               // 判定为「值得看」时自动收藏到哪个收藏夹（留空不收藏）
   /* 互动：默认关；打开后按配置自动执行（本机实例已单独打开） */
   autoComment: false,
@@ -190,6 +198,11 @@ function normalizeCfg(c) {
   out.selfVideosUrl = String(out.selfVideosUrl || '').trim().slice(0, 300)
   out.selfVideosRefreshHours = clampNum(out.selfVideosRefreshHours, 1, 720, 24)
   out.reportLevel = ['full', 'brief', 'off'].includes(out.reportLevel) ? out.reportLevel : 'full'
+  out.memoryEnabled = out.memoryEnabled !== false
+  out.userCharLimit = clampNum(out.userCharLimit, 200, 6000, 1375)
+  out.memoryCharLimit = clampNum(out.memoryCharLimit, 200, 10000, 2200)
+  out.reflectEnabled = out.reflectEnabled !== false
+  out.memoryEventsMax = clampNum(out.memoryEventsMax, 100, 5000, 800)
   out.favFolderId = String(out.favFolderId || '').slice(0, 60)
   out.autoComment = out.autoComment !== false
   out.autoReply = out.autoReply !== false
@@ -504,13 +517,17 @@ function startRender(project, plan, version, voice) {
       project.renderVersion = job.version
       project.review = null
       plans.saveProject(project)
+      memory.addEvent('render', { runId, projectId: project.id, text: `渲染《${plan.title || project.id}》成功，${st?.seconds || '?'} 秒成片已出` })
       log(`出片完成 ${runId}（${st?.seconds || '?'} 秒，真实帧 ${frameCount}）`)
+      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
     } else {
       job.stage = 'failed'
       job.error = job.log.slice(-1200) || ('退出码 ' + code)
       project.stage = 'draft'
       plans.saveProject(project)
+      memory.addEvent('render', { runId, projectId: project.id, ok: false, text: `渲染《${plan.title || project.id}》失败：${job.error.slice(0, 60)}` })
       log(`出片失败 ${runId}（退出码 ${code}）`)
+      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
     }
   })
   return job
@@ -803,7 +820,10 @@ export function apply(ctx) {
       const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
       const args = [brief, '--out', tmp]
       if (body.limit) args.push('--limit', String(Math.min(Number(body.limit) || 40, 120)))
-      const r = await runEngine('plan.mjs', args, 10 * 60_000, { BILI_OP_SELF_VIDEOS: canon.renderBlock(brief) })
+      const r = await runEngine('plan.mjs', args, 10 * 60_000, {
+        BILI_OP_SELF_VIDEOS: canon.renderBlock(brief),
+        BILI_OP_MEMORY_QUERY: brief,
+      })
       let plan = null
       try { plan = JSON.parse(readFileSync(tmp, 'utf8')) } catch { plan = null }
       try { unlinkSync(tmp) } catch { /* 已删 */ }
@@ -812,6 +832,8 @@ export function apply(ctx) {
       }
       const project = plans.createProject(plan, { brief })
       log(`新方案 ${project.id}：${plan.title}`)
+      // 方案完成后复盘一次（节流在 reflect.mjs 里）：主人的指令是提炼习惯的重要来源
+      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
       return sendJson(res, 200, { ok: true, project, plan, log: (r.text || '').slice(-2500) })
     }
     if (req.method === 'POST' && path === '/create/revise') {
@@ -835,6 +857,7 @@ export function apply(ctx) {
       const tmp = join(STORE, 'plans', `.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
       const r = await runEngine('plan.mjs', ['--revise', prevFile, '--instruction', instruction, '--out', tmp], 10 * 60_000, {
         BILI_OP_SELF_VIDEOS: canon.renderBlock(instruction),
+        BILI_OP_MEMORY_QUERY: instruction,
       })
       let plan = null
       try { plan = JSON.parse(readFileSync(tmp, 'utf8')) } catch { plan = null }
@@ -892,6 +915,7 @@ export function apply(ctx) {
         intervalMinutes: Number(body.intervalMinutes) || 180,
         needed: Number(body.needed) || 3,
       })
+      memory.addEvent('task', { id: task.id, text: `接到创作指令「${brief.slice(0, 40)}」` })
       log(`新任务 ${task.id}：${brief}`)
       const t = setTimeout(() => { kickTask(task.id) }, 800)
       t.unref?.()
@@ -1044,6 +1068,7 @@ export function apply(ctx) {
       const st = renders.readStatus(runId)
       if (!st) return sendJson(res, 200, { ok: false, error: '成片不存在' })
       renders.setReview(runId, state, body.note)
+      memory.addEvent('review', { runId, state, text: `审核《${st.title || runId}》：${state === 'approved' ? '通过' : '打回'}${body.note ? `，备注：${String(body.note).slice(0, 40)}` : ''}` })
       if (st.projectId) {
         const p = plans.getProject(st.projectId)
         if (p) {
@@ -1053,6 +1078,8 @@ export function apply(ctx) {
         }
       }
       log(`审核 ${runId}：${state}`)
+      // 打回原因 / 通过偏好是复盘的重要素材，审完跑一次（节流在 reflect.mjs）
+      runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
       return sendJson(res, 200, { ok: true, status: renders.readStatus(runId) })
     }
     if (req.method === 'GET' && path === '/review/stats') {
@@ -1097,7 +1124,9 @@ export function apply(ctx) {
           const p = plans.getProject(st.projectId)
           if (p) { p.stage = 'published'; p.publishedBvid = bvid; plans.saveProject(p) }
         }
+        memory.addEvent('publish', { runId, bvid, text: `投稿了《${String(body.title || st.title || '').slice(0, 30)}》${bvid ? '（' + bvid + '）' : ''}` })
         log(`已投稿 ${runId} → ${bvid || '(无 BV)'}`)
+        runReflect().catch(() => { /* 复盘失败不影响主流程 */ })
       }
       return sendJson(res, 200, {
         ok: r.ok, dryRun, command: [runBiliName(), ...args],
@@ -1178,11 +1207,13 @@ export function apply(ctx) {
           ? {
             title: body.title || '', up: body.up || '', quotes: body.quotes || [], ownerCall: cfg.ownerCall, calls: callNames(cfg),
             selfVideos: canon.renderBlock(body.title || ''),
+            memoryRecall: memory.renderRecallBlock(body.title || '', { k: 3 }),
           }
           : {
             message: body.message || '', replyingTo: body.replyingTo || '', video: body.video || '',
             owner: body.owner === true, ownerCall: cfg.ownerCall,
             selfVideos: canon.renderBlock(body.message || body.video || ''),
+            memoryRecall: memory.renderRecallBlock(body.message || body.video || '', { k: 3 }),
           }
         const r = await runEngine('compose.mjs', ['--kind', kind, '--context', JSON.stringify(ctx)], 120_000)
         logText = r.text.slice(-1500)
@@ -1232,6 +1263,10 @@ export function apply(ctx) {
         if (kind === 'comment') interact.markComment(body.bv, { text })
         if (kind === 'reply') interact.markReply(body.rpid, { text })
         if (kind === 'dm') interact.markDm(body.uid || cfg.dmUid, { text })
+        const what = kind === 'comment' ? '评论了' : kind === 'reply' ? '回复了' : '私信了'
+        memory.addEvent(kind === 'dm' ? 'dm' : kind, {
+          bv: body.bv || '', text: `${what}《${String(body.title || body.bv || '').slice(0, 26)}》：${text.slice(0, 46)}`,
+        })
         log(`互动已发送（${kind}）：${text.slice(0, 40)}`)
       }
       return sendJson(res, 200, {
@@ -1261,6 +1296,7 @@ export function apply(ctx) {
       const copyKeys = [
         'enabled', 'keywords', 'llmKey', 'scheduleRanges', 'perDay',
         'personaPrompt', 'reportLevel', 'favFolderId',
+        'memoryEnabled', 'userCharLimit', 'memoryCharLimit', 'reflectEnabled', 'memoryEventsMax',
         'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',
         'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay',
         'ownerTasksEnabled', 'ownerTaskPollMinutes', 'ownerTaskPerDay', 'ownerTaskAllowDm', 'ownerTaskMaxAgeHours',
@@ -1301,6 +1337,39 @@ export function apply(ctx) {
       let data = null
       try { data = JSON.parse((r.text.match(/\{[\s\S]*\}\s*$/) || ['{}'])[0]) } catch { data = null }
       return sendJson(res, 200, { ok: Boolean(data?.reachable), data, error: r.ok ? null : r.text.slice(-500) })
+    }
+
+    /* ══════════ 记忆（长期偏好 / 工作台事实） ══════════ */
+    if (req.method === 'GET' && path === '/memory') {
+      try { return sendJson(res, 200, { ok: true, ...memory.snapshot() }) }
+      catch (e) { return sendJson(res, 200, { ok: false, error: e?.message ?? String(e) }) }
+    }
+    if (req.method === 'POST' && path === '/memory/op') {
+      const body = await readBody(req)
+      let r
+      if (Array.isArray(body.operations)) r = await memory.applyBatch(body.operations, { source: body.source || 'panel' })
+      else r = await memory.apply(body, { source: body.source || 'panel' })
+      log(`记忆操作：${Array.isArray(body.operations) ? 'batch' : `${body.target}.${body.action}`} → ${r.ok ? 'OK' : String(r.error || '').split('\n')[0]}`)
+      return sendJson(res, 200, { ok: r.ok, error: r.error || null, result: r })
+    }
+    if (req.method === 'POST' && path === '/memory/pending/approve') {
+      const body = await readBody(req)
+      const r = await memory.approvePending(body.id)
+      return sendJson(res, 200, { ok: r.ok, error: r.error || null, result: r })
+    }
+    if (req.method === 'POST' && path === '/memory/pending/discard') {
+      const body = await readBody(req)
+      return sendJson(res, 200, memory.discardPending(body.id))
+    }
+    if (req.method === 'POST' && path === '/memory/reflect') {
+      const r = await runReflect({ force: true })
+      log(r.ok ? `手动复盘完成：新记 ${r.added} 条` : `复盘未执行：${r.skipped || r.error || ''}`)
+      return sendJson(res, 200, r)
+    }
+    if (req.method === 'GET' && path === '/memory/events') {
+      const type = String(q.get('type') || '')
+      const limit = Math.max(1, Math.min(Number(q.get('limit')) || 50, 200))
+      return sendJson(res, 200, { ok: true, events: memory.listEvents({ type, limit }) })
     }
 
     return sendJson(res, 404, { ok: false, error: `unknown ${req.method} ${path}` })

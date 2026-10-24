@@ -14,6 +14,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { get, put, list, paths } from './store.mjs'
 import { loadLLM } from './llmpath.mjs'
+import { addEvent } from './memory.mjs'
 
 const { chatJSON, assertKey } = await loadLLM()
 
@@ -98,6 +99,10 @@ async function judgeOne(rec) {
     .slice(0, 4)
     .map((s) => s.slice(0, 20))
   put(rec)
+  addEvent('watched', {
+    bv: rec.bvid,
+    text: `看过《${String(rec.title).slice(0, 30)}》（${rec.up?.name || '?'}）：${rec.judge.tier}，${rec.judge.why}${quotes.length ? `，可用片段 ${quotes.length} 条` : ''}`,
+  })
   return rec
 }
 

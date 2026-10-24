@@ -15,6 +15,7 @@ import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
 import { ownerInfo, mentionTargets, callNames } from './owner.mjs'
 import * as canon from './canon.mjs'
+import { addEvent, renderRecallBlock } from './memory.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -80,6 +81,7 @@ async function main() {
       hotComments: (rec.hotComments || []).slice(0, 3).map((x) => x.text),
       ownerCall: owner.call,
       selfVideos: canon.renderBlock(rec.title || '', { picks: 2 }),
+      memoryRecall: renderRecallBlock(rec.title || '', { k: 3 }),
       calls,
     }
     let text = ''
@@ -99,7 +101,10 @@ async function main() {
     for (const t of targets) args.push('--at', t.target)
     const r = runBili(args, { timeoutMs: 60000 })
     if (r.ok) {
-      if (!dryRun) interact.markComment(rec.bvid, { rpid: r.data?.rpid || 0, text })
+      if (!dryRun) {
+        interact.markComment(rec.bvid, { rpid: r.data?.rpid || 0, text })
+        addEvent('comment', { bv: rec.bvid, text: `评论了《${String(rec.title).slice(0, 30)}》：${text.slice(0, 50)}` })
+      }
       ok++
       log(`  ✓ ${rec.bvid} ${dryRun ? 'dry-run' : '已评论'}：${text}`)
     } else {

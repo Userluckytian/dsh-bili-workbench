@@ -743,6 +743,7 @@ window.__ModuleLoader__.load({
           keywords: String(draft.keywordsText || '').split('\n').map((s) => s.trim()).filter(Boolean),
           llmKey: draft.llmKey,
           personaPrompt: draft.personaPrompt, reportLevel: draft.reportLevel, favFolderId: draft.favFolderId,
+          memoryEnabled: draft.memoryEnabled !== false,
           selfVideosEnabled: draft.selfVideosEnabled !== false,
           selfVideosUrl: draft.selfVideosUrl || '',
           selfVideosRefreshHours: draft.selfVideosRefreshHours,
@@ -812,6 +813,11 @@ window.__ModuleLoader__.load({
               h('div', { 'data-wb-h': '' }, '人设（判定 / 方案 / 评论都用它）'),
               h('textarea', { 'data-wb-input': '', 'data-area': '', rows: 6, value: draft.personaPrompt || '', onChange: (e) => set('personaPrompt', e.target.value), placeholder: '例：叫我老弟，说话像贴吧老哥，犀利不客气，控制在 40 字内' })),
             h('div', { 'data-wb-col': '' },
+              h('label', { 'data-wb-toggle': '' },
+                h('input', { type: 'checkbox', checked: draft.memoryEnabled !== false, onChange: (e) => set('memoryEnabled', e.target.checked) }),
+                h('span', {}, '让咕嘎有记忆（评论 / 回复 / 出方案时自动带上你的偏好和它的经历）')),
+              h(Note, {}, '人设是「它是谁」，不随开关变；这里管的是它记不记得住事。记了什么、删掉哪条，去「我的 → 记忆」看；任务后复盘提炼习惯也跟着这个开关走。')),
+            h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, '自己的视频（B站合集）'),
               h('label', { 'data-wb-toggle': '' },
                 h('input', { type: 'checkbox', checked: draft.selfVideosEnabled !== false, onChange: (e) => set('selfVideosEnabled', e.target.checked) }),
@@ -837,7 +843,7 @@ window.__ModuleLoader__.load({
 
           h(Sec, { title: '互动 · 自动评论与回复' },
             h(Field, { label: '主人 UID' },
-              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.ownerUid || '', onChange: (e) => set('ownerUid', e.target.value), placeholder: '例如 498295893' }),
+              h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.ownerUid || '', onChange: (e) => set('ownerUid', e.target.value), placeholder: '例如 123456789（你的 UID）' }),
               h(Note, {}, '只有这个 UID 的指令会被当主人；其他人问统计/配置会收到一句礼貌拒绝，不会拿到数据')),
             h(Field, { label: '称呼' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '120px' }, value: draft.ownerCall || '', onChange: (e) => set('ownerCall', e.target.value), placeholder: '老弟' }),
@@ -1295,6 +1301,137 @@ window.__ModuleLoader__.load({
           h('video', { src: preview, controls: true, autoPlay: true })) : null)
     }
 
+    /* ═══════════════════ 我的 → 记忆 ═══════════════════ */
+    function MemorySec() {
+      const [data, setData] = useState(null)
+      const [inputs, setInputs] = useState({ user: '', memory: '' })
+      const [busy, setBusy] = useState('')
+      const [msg, setMsg] = useState('')
+      const cfgRes = useApi('/config')
+      const cfg = cfgRes.data?.config
+
+      const refresh = async () => {
+        const r = await jget('/memory')
+        if (r.ok) setData(r)
+      }
+      useEffect(() => { refresh() }, [])
+      const op = async (o, note) => {
+        setBusy('op'); setMsg('')
+        const r = await jpost('/memory/op', o)
+        setBusy('')
+        if (!r.ok) setMsg(String(r.error || r.result?.error || '操作失败').split('\n')[0])
+        else if (note) setMsg(note)
+        refresh()
+      }
+      const toggleMemory = async (on) => {
+        setBusy('toggle')
+        const r = await jpost('/config', { memoryEnabled: on })
+        setBusy('')
+        if (r.ok) cfgRes.reload()
+      }
+      const toggleReflect = async (on) => {
+        setBusy('reflect-toggle')
+        const r = await jpost('/config', { reflectEnabled: on })
+        setBusy('')
+        if (r.ok) cfgRes.reload()
+      }
+      const runReflectNow = async () => {
+        setBusy('reflect'); setMsg('复盘中…（翻最近的经历，提炼你的习惯）')
+        const r = await jpost('/memory/reflect', {})
+        setBusy('')
+        if (r.ok) setMsg(`复盘完成：新记 ${r.added} 条${r.results?.some((x) => x.skipped) ? '（有候选被拦截）' : ''}`)
+        else setMsg(String(r.skipped || r.error || '复盘未执行').split('\n')[0])
+        refresh()
+      }
+      const evIcon = { watched: '👀', plan: '📝', 'plan-revise': '✏️', render: '🎬', review: '✅', comment: '💬', reply: '↩️', dm: '📨', publish: '🚀', task: '🎯', remember: '🧠' }
+      const pendings = data?.pending || []
+      const events = data?.events || { count: 0, types: {}, recent: [] }
+
+      const col = (key, title, hint) => {
+        const t = data?.[key]
+        return h('div', { 'data-wb-col': '', style: { minWidth: '0' } },
+          h('div', { 'data-wb-row': '' },
+            h('b', {}, title),
+            h('div', { 'data-wb-grow': '' }),
+            h(Chip, {}, `${t?.entries?.length ?? 0} 条 · ${t?.used ?? 0}/${t?.limit ?? 0} 字`)),
+          h(Note, {}, hint),
+          t?.error ? h('div', { 'data-wb-err': '' }, t.error) : null,
+          h('div', { style: { display: 'flex', gap: '6px', margin: '6px 0' } },
+            h('input', {
+              'data-wb-input': '', style: { flex: '1', minWidth: '0' }, value: inputs[key],
+              placeholder: key === 'user' ? '例：标题别超过 18 个字' : '例：1080p 渲染并发 4 会 OOM，用 2',
+              onChange: (e) => setInputs({ ...inputs, [key]: e.target.value }),
+              onKeyDown: async (e) => {
+                if (e.key === 'Enter' && inputs[key]?.trim()) {
+                  const v = inputs[key].trim()
+                  setInputs({ ...inputs, [key]: '' })
+                  await op({ target: key, action: 'add', content: v }, '已记下')
+                }
+              },
+            }),
+            h(Btn, {
+              sm: true, disabled: busy === 'op' || !inputs[key]?.trim(),
+              onClick: async () => { const v = inputs[key].trim(); await op({ target: key, action: 'add', content: v }, '已记下'); setInputs({ ...inputs, [key]: '' }) },
+            }, '记一条')),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            (t?.entries || []).map((e, i) => h('div', {
+              key: i, 'data-wb-row': '',
+              style: e.blocked ? { color: '#ef4444', borderBottom: '1px dashed #ef4444', padding: '2px 0' } : { borderBottom: '1px solid rgba(128,128,128,.2)', padding: '2px 0' },
+              title: e.blocked ? `已屏蔽：${e.blockedWhy}（磁盘原文保留）` : `${e.source || ''} ${e.at ? '· ' + e.at.slice(0, 10) : ''}`,
+            },
+            h('span', { style: { flex: '1', minWidth: '0' } }, e.blocked ? `⛔ ${e.text}` : e.text),
+            h('button', {
+              'data-wb-ghost': '', style: { border: 'none', background: 'none', cursor: 'pointer', color: '#999' },
+              title: '删除这条', onClick: () => op({ target: key, action: 'remove', old_text: e.text }, '已删'),
+            }, '×')))),
+          !t?.entries?.length && !t?.error ? h(Note, {}, '（空）') : null)
+      }
+
+      return h(Sec, { title: '记忆（长期偏好 / 工作台事实 / 经历）' },
+        h('div', { 'data-wb-row': '' },
+          h('label', { 'data-wb-toggle': '' },
+            h('input', { type: 'checkbox', checked: cfg?.memoryEnabled !== false, disabled: busy === 'toggle', onChange: (e) => toggleMemory(e.target.checked) }),
+            h('span', {}, '开启长期记忆（写评论 / 出方案时自动带上）')),
+          h('div', { 'data-wb-grow': '' }),
+          h(Btn, { sm: true, onClick: refresh }, '刷新'),
+          msg ? h('span', { 'data-wb-note': '' }, msg) : null),
+        h(Note, {}, `文件在 ${data?.dir || '素材库/memory/'}（USER.md = 主人偏好，MEMORY.md = 工作台事实；纯文本可手改，条目用 § 分隔）。主人在评论区说「记住：…」会自动进 USER.md；普通人的「记住」不会采纳。红色 ⛔ = 命中注入扫描，注入时已屏蔽。`),
+        h('div', { 'data-wb-grid': '', style: { gridTemplateColumns: 'repeat(2,minmax(0,1fr))', marginTop: '6px' } },
+          col('user', '主人画像（USER.md）', '老弟的口味：称呼、标题长度、封面偏好、禁用梗'),
+          col('memory', '工作台笔记（MEMORY.md）', '环境的坑：B站限制、渲染参数、恢复办法')),
+        /* ── 经历流（events.jsonl）：咕嘎自动记录的「看过/做过/结果」，创作时按题材召回 ── */
+        h('div', { style: { marginTop: '10px' } },
+          h('div', { 'data-wb-row': '' },
+            h('b', {}, `经历流（${events.count} 条）`),
+            h('div', { 'data-wb-grow': '' }),
+            h(Chip, {}, Object.entries(events.types || {}).map(([t, n]) => `${evIcon[t] || '·'}${n}`).join(' ') || '还没有')),
+          h(Note, {}, '咕嘎自动记录：看过什么、出过什么方案、渲染/审核/评论结果。出方案和写评论时会按题材把相关经历想起来；保留 90 天 / 上限条数。')),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' } },
+          (events.recent || []).map((e, i) => h('div', {
+            key: i, 'data-wb-row': '', style: { borderBottom: '1px solid rgba(128,128,128,.15)', padding: '2px 0' },
+            title: `${e.at} · ${e.type}`,
+          },
+          h('span', { style: { marginRight: '6px' } }, evIcon[e.type] || '·'),
+          h('span', { 'data-wb-grow': '', style: { minWidth: '0' } }, String(e.text || '').slice(0, 70)),
+          h('span', { style: { color: '#999', fontSize: '12px' } }, String(e.at || '').slice(5, 10))))),
+        !events.recent?.length ? h(Note, {}, '（还没有经历，刷几条 B站 或出一个方案就有了）') : null,
+        /* ── 复盘（M2）：从经历里提炼跨次有效的偏好 ── */
+        h('div', { 'data-wb-row': '', style: { marginTop: '8px' } },
+          h('label', { 'data-wb-toggle': '' },
+            h('input', { type: 'checkbox', checked: cfg?.reflectEnabled !== false, disabled: busy === 'reflect-toggle', onChange: (e) => toggleReflect(e.target.checked) }),
+            h('span', {}, '任务后自动复盘（从经历里提炼你的习惯，只增不改）')),
+          h('div', { 'data-wb-grow': '' }),
+          h(Btn, { sm: true, disabled: busy === 'reflect', onClick: runReflectNow }, '立即复盘'),
+          data?.reflect?.lastAt ? h('span', { 'data-wb-note': '' }, `上次 ${String(data.reflect.lastAt).slice(5, 16).replace('T', ' ')} · 累计新记 ${data.reflect.added || 0} 条`) : null),
+        pendings.length ? h('div', { style: { marginTop: '8px' } },
+          h('b', {}, `待批提案（${pendings.length}）`),
+          h(Note, {}, '无人值守任务只能「记新条」，改动/删除会在这里等批准'),
+          pendings.map((p) => h('div', { key: p.id, 'data-wb-row': '', style: { padding: '2px 0' } },
+            h('span', { 'data-wb-grow': '' }, `#${p.id} ${p.target}.${p.action}：${(p.matched_entry || p.old_text || '').slice(0, 40)}${p.new_text ? ' → ' + p.new_text.slice(0, 30) : ''}`),
+            h(Btn, { sm: true, onClick: async () => { await jpost('/memory/pending/approve', { id: p.id }); refresh() } }, '批准'),
+            h(Btn, { sm: true, onClick: async () => { await jpost('/memory/pending/discard', { id: p.id }); refresh() } }, '丢弃')))) : null)
+    }
+
     /* ═══════════════════ ⑤ 我的 ═══════════════════ */
     function TabMine() {
       const [auth, setAuth] = useState(null)
@@ -1445,8 +1582,10 @@ window.__ModuleLoader__.load({
 
           h(Sec, { title: '模型链' },
             h('div', { 'data-wb-kv': '' }, (cfg?.modelChain || []).map((m, i) => h('div', { key: i }, `${i + 1}. ${m}`))),
-            h(Note, {}, '在「刷B站 → 设置 → 模型链」里改。失败自动换下一个。'))),
-        h(Err, {}, cfgRes.err))
+            h(Note, {}, '在「刷B站 → 设置 → 模型链」里改。失败自动换下一个。')),
+
+          h(MemorySec),
+          h(Err, {}, cfgRes.err)))
     }
 
     /* ═══════════════════ 外壳 ═══════════════════ */

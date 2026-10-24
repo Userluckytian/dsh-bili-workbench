@@ -9,11 +9,16 @@
 
 export const LLM_BASE = (process.env.BILI_OP_LLM_BASE || 'http://127.0.0.1:40080/v1').replace(/\/+$/, '')
 const KEY = process.env.OC_API_KEY || process.env.BILI_OP_LLM_KEY || ''
-export const MODELS = (process.env.BILI_OP_MODELS || 'deepseek-v4.1-flash,big-pickle,glm-5.3-flash')
-  .split(',').map((s) => s.trim()).filter(Boolean)
-
+/** 模型链每次调用时读 env：进程内调用（reflect/语气改写）可能在启动后才设置 BILI_OP_MODELS */
+export function models() {
+  return (process.env.BILI_OP_MODELS || 'deepseek-v4.1-flash,big-pickle,glm-5.3-flash')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+}
 let modelIdx = 0
-export const currentModel = () => MODELS[((modelIdx % MODELS.length) + MODELS.length) % MODELS.length]
+export const currentModel = () => {
+  const m = models()
+  return m[((modelIdx % m.length) + m.length) % m.length]
+}
 
 export function assertKey() {
   if (!KEY) {
@@ -34,7 +39,7 @@ export async function chat(messages, { maxTokens = 3000, temperature = 0.4, time
   const waitMs = Number(process.env.BILI_OP_429_WAIT || 15000)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-  for (let attempt = 0; attempt < MODELS.length; attempt++) {
+  for (let attempt = 0, total = models().length; attempt < total; attempt++) {
     const model = currentModel()
     // 每个模型最多试 2 次（429 限流时退避一次再试，别立刻放弃）
     for (let inner = 0; inner < 2; inner++) {
@@ -82,7 +87,7 @@ export async function chat(messages, { maxTokens = 3000, temperature = 0.4, time
         clearTimeout(timer)
       }
     }
-    if (attempt === MODELS.length - 1) {
+    if (attempt === models().length - 1) {
       throw new Error('所有模型都失败了：\n  ' + tried.join('\n  '))
     }
   }
@@ -135,7 +140,7 @@ export async function chatJSON(messages, opts = {}) {
 
 /** 健康检查：能不能连上、哪些模型可用 */
 export async function health() {
-  const out = { base: LLM_BASE, hasKey: Boolean(KEY), models: MODELS, reachable: false, modelList: [] }
+  const out = { base: LLM_BASE, hasKey: Boolean(KEY), models: models(), reachable: false, modelList: [] }
   try {
     const r = await fetch(`${LLM_BASE}/models`, { headers: KEY ? { authorization: `Bearer ${KEY}` } : {} })
     out.reachable = r.ok

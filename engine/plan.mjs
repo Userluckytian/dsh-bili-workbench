@@ -15,6 +15,7 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { list, STORE, paths } from './store.mjs'
 import { loadLLM } from './llmpath.mjs'
+import { renderBlock, renderRecallBlock, addEvent } from './memory.mjs'
 
 const { chatJSON, assertKey } = await loadLLM()
 
@@ -43,6 +44,18 @@ function personaLine() {
 function selfVideosLine() {
   const b = String(process.env.BILI_OP_SELF_VIDEOS || '').trim()
   return b ? `\n\n${b}\n写标题、点评和旁白时可以参考自己拍过的东西，但不要硬提。` : ''
+}
+
+/** 长期记忆（主人偏好 / 工作台事实）：标题长度、封面偏好这类纠正要在这里生效 */
+function memoryLine() {
+  const b = renderBlock()
+  return b ? `\n\n${b}\n写标题、点评和旁白时遵守上面的长期记忆。` : ''
+}
+
+/** 经历召回（events.jsonl top-k）：前两天看过的剧、做过的方案，按题材想起来 */
+function recallLine() {
+  const b = renderRecallBlock(process.env.BILI_OP_MEMORY_QUERY || '', { k: 6 })
+  return b ? `\n\n${b}\n参考上面的经历挑素材、定角度：经历里正好相关的题材优先用。` : ''
 }
 
 function buildPrompt(brief, rows, limit, revise = null) {
@@ -188,7 +201,7 @@ async function main() {
   console.log(`素材候选 ${rows.length} 条（带字幕/片段），喂给模型前 ${Math.min(rows.length, limit)} 条`)
   const t0 = Date.now()
   const { json, model } = await chatJSON(
-    [{ role: 'system', content: SYSTEM + personaLine() + selfVideosLine() }, { role: 'user', content: buildPrompt(brief, rows, limit, prev) }],
+    [{ role: 'system', content: SYSTEM + personaLine() + memoryLine() + recallLine() + selfVideosLine() }, { role: 'user', content: buildPrompt(brief, rows, limit, prev) }],
     { maxTokens: 3500, temperature: 0.55 },
   )
   const plan = normalize(json, rows)
@@ -197,6 +210,13 @@ async function main() {
   plan.model = model
   plan.createdAt = new Date().toISOString()
   if (reviseFile && !plan.changed) plan.changed = '按指令改了这一版'
+
+  addEvent(reviseFile ? 'plan-revise' : 'plan', {
+    brief: String(brief).slice(0, 80),
+    title: plan.title,
+    bvs: plan.picks.map((p) => p.bv),
+    text: `${reviseFile ? '按「' + String(brief).slice(0, 20) + '」改了方案' : '为「' + String(brief).slice(0, 30) + '」出了方案'}《${plan.title}》`,
+  })
 
   const out = arg('out', '')
   let file
