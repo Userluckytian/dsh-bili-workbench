@@ -56,9 +56,9 @@
   .copy:hover{color:var(--text)}
 
   /* screenshot */
-  .shot{margin:30px auto 10px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
-    box-shadow:0 20px 60px rgba(0,0,0,.45)}
-  .shot img{width:100%;display:block}
+  .shots{margin:30px auto 10px;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:768px){.shots{grid-template-columns:1fr}}
+  .shots img{width:100%;height:auto;display:block;border-radius:12px;border:1px solid rgba(255,255,255,.1);box-shadow:0 8px 32px rgba(0,0,0,.3)}
 
   /* sections */
   section{padding:44px 0}
@@ -130,8 +130,10 @@
       <code id="cmd">dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench</code>
       <button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('cmd').textContent)">复制</button>
     </div>
-    <div class="shot">
-      <img src="workbench.png" alt="B站工作台界面预览">
+    <div class="shots">
+      <img src="screenshot-store.png" alt="素材库（六栏中枢）">
+      <img src="screenshot-create.png" alt="创作出片">
+      <img src="screenshot-mine.png" alt="我的与记忆">
     </div>
   </header>
 

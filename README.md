@@ -7,7 +7,9 @@
 
 刷到的视频会落进素材库，出片引擎从库里取真实帧和金句；同一条视频只抓一次。不是又一个「B站信息流面板」，而是一条从**看**到**做**再到**发**的完整流水线。
 
-![界面预览](docs/workbench.png)
+![素材库](docs/screenshot-store.png)
+![创作出片](docs/screenshot-create.png)
+![我的与记忆](docs/screenshot-mine.png)
 
 ## 功能
 
@@ -93,6 +95,23 @@ node scripts/doctor.mjs
    - 模型端点：环境变量 `BILI_OP_LLM_BASE`，默认 `http://127.0.0.1:40080/v1`。
 4. 点「立即跑一轮」，确认能采集、判定、写日报。
 5. 需要出片时，去「创作 / 出片」生成方案并渲染。
+
+## 素材包
+
+音色 / 片段 / 表情包 / BGM / 贴纸这些素材**不打进安装包**（体积太大），默认从素材库的兄弟目录找：
+
+```text
+<素材库>/../assets-src/
+  voices/   参考音 wav（同名 .txt 是参考文本）
+  clips/    片段 + index.json
+  memes/    表情包（bili-emotes + index.json）
+  bgm/      BGM + index.json
+  stickers/ 贴纸（openmoji/png-618x618-color）
+```
+
+- 目录不存在时，素材页会显示「未找到素材目录」，并在「我的 → 自检」里能看到各项状态。
+- 可用环境变量 `BILI_ASSETS` 指向你的素材目录（优先级最高），设置后重启生效。
+- 首次使用：可从 release 附件下载素材包解压到上述位置，或自行准备（音色也可以在「素材库 → 音色」里采新 / 导入本地 wav）。
 
 ## 自动互动：默认关，打开前请读完
 
