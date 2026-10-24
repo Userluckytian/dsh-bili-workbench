@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dsh-bili-workbench · B站工作台</title>
+<meta name="description" content="一个 DSH 插件：把「刷 B站 / 素材库 / AI 出片 / 审核发布 / 自动互动」放进同一个工作台。">
+<style>
+  :root{
+    --bg:#0d1424;
+    --bg-soft:#121a2e;
+    --card:#141d33;
+    --border:#24314f;
+    --text:#e6ecff;
+    --muted:#9aa8c7;
+    --accent1:#5B8CFF;
+    --accent2:#A78BFA;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  a{color:var(--accent1)}
+  .grad{background:linear-gradient(90deg,var(--accent1),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* hero */
+  header{padding:72px 0 40px;text-align:center}
+  header h1{font-size:2.4rem;font-weight:800;letter-spacing:.5px}
+  header .slogan{color:var(--muted);font-size:1.08rem;margin:14px auto 8px;max-width:640px}
+  .flow{color:var(--muted);font-size:.95rem;margin-bottom:28px}
+  .flow b{color:var(--text)}
+  .btn{
+    display:inline-block;padding:11px 22px;border-radius:10px;font-weight:600;
+    text-decoration:none;transition:opacity .2s;margin:4px
+  }
+  .btn:hover{opacity:.85}
+  .btn-grad{background:linear-gradient(90deg,var(--accent1),var(--accent2));color:#fff}
+  .btn-ghost{border:1px solid var(--border);color:var(--text)}
+  .install{
+    display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;
+    margin-top:22px
+  }
+  .install code{
+    background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;
+    padding:10px 16px;font-size:.9rem;color:#cfe0ff;
+    font-family:Consolas,"JetBrains Mono",monospace
+  }
+  .copy{
+    background:var(--bg-soft);border:1px solid var(--border);color:var(--muted);
+    border-radius:8px;padding:10px 14px;cursor:pointer;font-size:.85rem
+  }
+  .copy:hover{color:var(--text)}
+
+  /* screenshot */
+  .shot{margin:30px auto 10px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .shot img{width:100%;display:block}
+
+  /* sections */
+  section{padding:44px 0}
+  h2{font-size:1.5rem;font-weight:700;margin-bottom:8px}
+  .sub{color:var(--muted);font-size:.95rem;margin-bottom:26px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .card{
+    background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;
+    transition:border-color .2s,transform .2s
+  }
+  .card:hover{border-color:var(--accent1);transform:translateY(-2px)}
+  .card .icon{font-size:1.6rem}
+  .card h3{font-size:1.08rem;margin:8px 0 6px}
+  .card p{color:var(--muted);font-size:.92rem}
+
+  ul.list{list-style:none}
+  ul.list li{
+    background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:12px 16px;margin-bottom:10px;color:var(--muted);font-size:.95rem
+  }
+  ul.list li b{color:var(--text)}
+  code.inline{
+    background:var(--bg-soft);border:1px solid var(--border);border-radius:6px;
+    padding:2px 7px;font-size:.85rem;color:#cfe0ff;
+    font-family:Consolas,"JetBrains Mono",monospace
+  }
+
+  .steps{counter-reset:step}
+  .steps li{counter-increment:step;position:relative;padding-left:52px;margin-bottom:14px}
+  .steps li::before{
+    content:counter(step);position:absolute;left:0;top:10px;width:34px;height:34px;
+    border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,var(--accent1),var(--accent2));color:#fff;font-weight:700
+  }
+
+  .notice{
+    background:var(--card);border-left:4px solid var(--accent2);border-radius:10px;
+    padding:16px 20px;margin-bottom:12px;color:var(--muted);font-size:.95rem
+  }
+  .notice b{color:var(--text)}
+
+  footer{
+    border-top:1px solid var(--border);margin-top:40px;padding:28px 0 44px;
+    text-align:center;color:var(--muted);font-size:.9rem
+  }
+  footer a{color:var(--accent1);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+
+  @media (max-width:600px){
+    header h1{font-size:1.7rem}
+    header{padding:48px 0 28px}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <h1>dsh-bili-workbench <span class="grad">B站工作台</span></h1>
+    <p class="slogan">一个 <b>DSH（DeepSeek Harness）</b> 插件：把「刷 B站 / 素材库 / AI 出片 / 审核发布 / 自动互动」放进同一个工作台。</p>
+    <p class="flow"><b>刷B站采素材</b> → <b>记忆沉淀</b> → <b>AI 出片</b> → <b>审核发布</b> → <b>自动互动</b></p>
+    <div>
+      <a class="btn btn-grad" href="https://github.com/Userluckytian/dsh-bili-workbench">GitHub 仓库</a>
+      <a class="btn btn-ghost" href="https://github.com/Userluckytian/dsh-bili-workbench#readme">完整文档</a>
+    </div>
+    <div class="install">
+      <code id="cmd">dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench</code>
+      <button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('cmd').textContent)">复制</button>
+    </div>
+    <div class="shot">
+      <img src="workbench.png" alt="B站工作台界面预览">
+    </div>
+  </header>
+
+  <section>
+    <h2>功能一览</h2>
+    <p class="sub">不是又一个「B站信息流面板」，而是一条从<b>看</b>到<b>做</b>再到<b>发</b>的完整流水线。</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">📚</div>
+        <h3>素材库（六栏中枢）</h3>
+        <p>视频元数据、逐字稿（带时间戳）、关键帧、封面、AI 点评、可引用金句，外加热评 / 弹幕 / 热梗。按 BV 幂等，7 天内不重复抓——同一条视频只采一次。</p>
+      </div>
+      <div class="card">
+        <div class="icon">🎬</div>
+        <h3>刷B站</h3>
+        <p>综合热门 / 关键词搜索 / 看懂视频。按多时段 + 每日上限自动采集，每条采完自动判定、抽句、抓热评弹幕热梗、刷新日报。</p>
+      </div>
+      <div class="card">
+        <div class="icon">✍️</div>
+        <h3>创作出片</h3>
+        <p>转场 · 音效 · BGM · 字幕样式 · 动画形象 · 真实片段 · 小剧场。一句话出方案 → 改一版（v1/v2…）→ 真实帧 + Edge-TTS 配音 + Remotion 渲染 1080p 成片与封面。</p>
+      </div>
+      <div class="card">
+        <div class="icon">✅</div>
+        <h3>审核发布（三重闸门）</h3>
+        <p>待审列表、通过 / 打回、预览成片、投稿 dry-run。真投稿默认关；打开后仍需二次确认，删成片也要确认。</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧠</div>
+        <h3>记忆系统（三层）</h3>
+        <p>刷到的视频沉淀为素材记忆，日报与判定结论长期留存，出片引擎从记忆库里取真实帧和金句，越用越懂你的频道。</p>
+      </div>
+      <div class="card">
+        <div class="icon">💬</div>
+        <h3>带图评论</h3>
+        <p>可选：每条采到的视频自动留一条评论并 @ 你；有人回复就自动回。主人身份与只读指令、12 秒发送间隔 + 每日上限，默认关。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>环境要求</h2>
+    <ul class="list">
+      <li><b>DSH</b> <code class="inline">&gt;= 0.2.1-rc.1</code>（<code class="inline">dsh --version</code>）</li>
+      <li><b>Node.js</b> <code class="inline">&gt;= 22</code></li>
+      <li><b>bili CLI</b>（PyPI 包 <code class="inline">bili-agent</code>，命令名 <code class="inline">bili</code>）—— 账号操作的「手」</li>
+      <li><b>ffmpeg</b>（需要 libass，烧字幕用）</li>
+      <li><b>yt-dlp</b>（片段采集）</li>
+      <li>可选：<b>GPT-SoVITS</b>（参考音色）、<b>rembg</b>（贴纸抠图）</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>安装三步</h2>
+    <ol class="list steps">
+      <li><b>安装插件</b>：<br><code class="inline">dsh plugin --profile web add github:Userluckytian/dsh-bili-workbench</code><br>装完重启 dsh，刷新浏览器，会话顶部出现「B站工作台」页签。</li>
+      <li><b>装外部命令</b>：<code class="inline">uv tool install bili-agent</code> 并 <code class="inline">bili auth login</code> 扫码；<code class="inline">winget install Gyan.FFmpeg</code>；可跑 <code class="inline">node scripts/doctor.mjs</code> 自检。</li>
+      <li><b>准备素材包</b>：素材不打进安装包，默认放素材库兄弟目录 <code class="inline">&lt;store&gt;/../assets-src/</code>（voices / clips / memes / bgm / stickers），可用环境变量 <code class="inline">BILI_ASSETS</code> 指向你的素材目录（优先级最高，改后重启生效）。目录不存在时素材页会提示，可在「我的 → 自检」查看状态。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>合规提示</h2>
+    <div class="notice"><b>AI 声明自动附加</b>：AI 生成的视频 / 评论会自动附加 AI 生成声明，透明标注内容来源。</div>
+    <div class="notice"><b>二创边界</b>：出片只引用你采到的素材与真实帧，请遵守 B 站社区规则与原作者权益，二创注明出处。</div>
+    <div class="notice"><b>声音授权</b>：参考音色请使用你本人或已获授权的声音，GPT-SoVITS 采样同样需获得授权。</div>
+  </section>
+
+  <footer>
+    <p>MIT License · <a href="https://github.com/Userluckytian/dsh-bili-workbench">GitHub</a></p>
+    <p style="margin-top:6px">dsh-bili-workbench — 从「看」到「做」再到「发」的 B 站流水线</p>
+  </footer>
+
+</div>
+</body>
+</html>
