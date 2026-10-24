@@ -173,15 +173,32 @@
   </section>
 
   <section>
-    <h2>环境要求</h2>
-    <ul class="list">
-      <li><b>DSH</b> <code class="inline">&gt;= 0.2.1-rc.1</code>（<code class="inline">dsh --version</code>）</li>
-      <li><b>Node.js</b> <code class="inline">&gt;= 22</code></li>
-      <li><b>bili CLI</b>（PyPI 包 <code class="inline">bili-agent</code>，命令名 <code class="inline">bili</code>）—— 账号操作的「手」</li>
-      <li><b>ffmpeg</b>（需要 libass，烧字幕用）</li>
-      <li><b>yt-dlp</b>（片段采集）</li>
-      <li>可选：<b>GPT-SoVITS</b>（参考音色）、<b>rembg</b>（贴纸抠图）</li>
-    </ul>
+    <h2>环境要求 · 会安装什么（依赖明细）</h2>
+    <p class="sub">装之前先知道自己会装什么、各占多少空间。下面是实测占用参考。</p>
+    <style>
+      .tbl-wrap { overflow-x: auto; }
+      table.dep { width: 100%; border-collapse: collapse; min-width: 720px; font-size: 14px; }
+      table.dep th, table.dep td { border: 1px solid rgba(255,255,255,.14); padding: 8px 10px; text-align: left; vertical-align: top; }
+      table.dep th { background: rgba(255,255,255,.06); white-space: nowrap; }
+      table.dep td.opt { color: #9fb4d8; }
+    </style>
+    <div class="tbl-wrap">
+    <table class="dep">
+      <thead><tr><th>组件</th><th>是什么 / 干什么用</th><th>怎么装</th><th>大概占用</th><th>必装?</th></tr></thead>
+      <tbody>
+        <tr><td><b>dsh ≥0.2.1</b></td><td>插件宿主（DeepSeek Harness），工作台跑在它的 web 界面里</td><td>见 dsh 官方文档</td><td>~50 MB</td><td>必装</td></tr>
+        <tr><td><b>Node.js ≥22</b></td><td>插件与出片引擎的运行时</td><td>nodejs.org 安装包</td><td>~110 MB</td><td>必装</td></tr>
+        <tr><td><b>bili CLI</b>（bili-agent）</td><td>B站操作命令行：登录/搜索/评论/投稿都靠它</td><td><code class="inline">uv tool install bili-agent</code> 或 <code class="inline">pip install bili-agent</code>（需 Python 3.10+，~150 MB）</td><td>~30 MB（不含 Python）</td><td>必装</td></tr>
+        <tr><td><b>ffmpeg</b>（full build）</td><td>音视频处理：混音/烧字幕/封面/裁片段，必须含 libass</td><td>gyan.dev 的 full 版，解压后把 bin 加 PATH</td><td>~400 MB</td><td>必装</td></tr>
+        <tr><td><b>yt-dlp</b></td><td>从B站下载视频片段（名场面裁剪用）</td><td><code class="inline">uv tool install yt-dlp</code></td><td>~50 MB</td><td>必装</td></tr>
+        <tr><td><b>edge-tts</b></td><td>微软免费配音（4 种中文音色，出片旁白默认用它）</td><td>随插件自动安装（bili-op 依赖）</td><td>~10 MB</td><td>必装（自动）</td></tr>
+        <tr><td><b>Remotion + React</b></td><td>浏览器渲染出片的引擎</td><td><code class="inline">dsh plugin add</code> 时随插件自动安装（pnpm）</td><td>~500 MB（node_modules 内）</td><td>必装（自动）</td></tr>
+        <tr class="opt"><td><b>GPT-SoVITS</b></td><td>【可选】声音克隆：给视频角色配自定义音色（10 秒参考音即可克隆，CPU 可跑）</td><td>git clone 官方仓库 + venv + v1 模型四件套，详见仓库 <code class="inline">docs/指南-声音克隆.md</code></td><td>~5 GB（含 torch CPU 与模型）</td><td class="opt">可选</td></tr>
+        <tr class="opt"><td><b>rembg</b></td><td>【可选】本地抠图：把角色图片抠成透明 PNG 当视频形象</td><td><code class="inline">uv tool install rembg</code>，首次运行自动下载 bria-rmbg 模型</td><td>~1.2 GB（模型 1 GB）</td><td class="opt">可选</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="sub" style="margin-top:10px"><b>合计</b>：必装全家桶约 1.2 GB；加声音克隆（GPT-SoVITS）约 6 GB。</p>
   </section>
 
   <section>
@@ -191,6 +208,26 @@
       <li><b>装外部命令</b>：<code class="inline">uv tool install bili-agent</code> 并 <code class="inline">bili auth login</code> 扫码；<code class="inline">winget install Gyan.FFmpeg</code>；可跑 <code class="inline">node scripts/doctor.mjs</code> 自检。</li>
       <li><b>准备素材包</b>：素材不打进安装包，默认放素材库兄弟目录 <code class="inline">&lt;store&gt;/../assets-src/</code>（voices / clips / memes / bgm / stickers），可用环境变量 <code class="inline">BILI_ASSETS</code> 指向你的素材目录（优先级最高，改后重启生效）。目录不存在时素材页会提示，可在「我的 → 自检」查看状态。</li>
     </ol>
+    <h3>素材目录说明</h3>
+    <p class="sub">素材库目录 <code class="inline">assets-src</code> 默认在 <code class="inline">&lt;store&gt;/../assets-src</code>（完整素材包约 534 MB），可用环境变量 <code class="inline">BILI_ASSETS</code> 指向任意目录。首次使用可从 GitHub Release 附件下载素材包解压，或按下面的「素材从哪来」清单自行收集——每类素材只要<b>放对目录 + 建好 index.json</b> 就能被识别。</p>
+  </section>
+
+  <section>
+    <h2>素材从哪来（开源素材清单）</h2>
+    <p class="sub">全部素材来源与许可逐项公开，可自行增补。</p>
+    <div class="tbl-wrap">
+    <table class="dep">
+      <thead><tr><th>素材</th><th>内容</th><th>来源</th><th>许可</th><th>入库方式</th></tr></thead>
+      <tbody>
+        <tr><td><b>转场音效</b></td><td>8 包 571 个短音效</td><td><a href="https://kenney.nl" target="_blank" rel="noopener">kenney.nl</a>（经 OpenGameArt 官方账号下载）</td><td>CC0 免署名可商用</td><td>tools/fetch 脚本或手动放 <code class="inline">assets-src/sfx/</code></td></tr>
+        <tr><td><b>背景音乐</b></td><td>100 首（414 MB）</td><td>Mixkit 84 首 + Free Music Archive 16 首</td><td>Mixkit 免版税 / CC BY / CC0（逐首记录在 index.json）</td><td>index.json 索引，可自行增补</td></tr>
+        <tr><td><b>贴纸</b></td><td>OpenMoji 彩色版 4495 张</td><td><a href="https://github.com/hfg-gmuend/openmoji" target="_blank" rel="noopener">github.com/hfg-gmuend/openmoji</a></td><td>CC BY-SA 4.0（需署名）</td><td>随素材包/自行下载 release zip</td></tr>
+        <tr><td><b>B站表情包</b></td><td>371 张官方表情</td><td>bili CLI 的 emotes 接口（登录后可取）</td><td>B站官方表情，评论内可免费用</td><td><code class="inline">tools/fetch-emotes.mjs</code> 一键收集</td></tr>
+        <tr><td><b>名场面片段</b></td><td>按需裁剪</td><td>你看的B站视频（yt-dlp 按秒裁 15 秒）</td><td>二创引用需标注出处</td><td><code class="inline">engine/clip.mjs</code> 或工作台音色栏同款流程</td></tr>
+        <tr><td><b>音色样本</b></td><td>任意说话人 8-10 秒</td><td>任何视频/录音（demucs 自动去背景乐）</td><td>克隆真人声音需本人授权</td><td>工作台「素材库→音色→+采新音色」</td></tr>
+      </tbody>
+    </table>
+    </div>
   </section>
 
   <section>
