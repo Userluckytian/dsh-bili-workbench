@@ -148,7 +148,9 @@ async function main() {
 
     const args = []
     if (dryRun) args.push('--dry-run')
-    args.push('comment', 'reply', m.on.bvid, String(m.rpid), text)
+    args.push('comment', 'reply', m.on.bvid, String(m.rpid))
+    if (text.startsWith('-')) args.push('--') // 防止以 - 开头的文本被 argparse 当作选项
+    args.push(text)
     if (m.root) args.push('--root', String(m.root))
     const res = runBili(args, { timeoutMs: 60000 })
     if (res.ok) {

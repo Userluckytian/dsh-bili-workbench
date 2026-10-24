@@ -124,6 +124,7 @@ export function prepareRun(proj, plan, version) {
     subtitle: plan.subtitle || '',
     theme: plan.brief || proj.brief || '',
     angle: plan.angle || '',
+    subtitleStyle: plan.subtitleStyle || '',
     shots,
     stats: {
       shotCount: shots.length,

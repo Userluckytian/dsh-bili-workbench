@@ -118,7 +118,9 @@ async function main() {
 
     const args = []
     if (dryRun) args.push('--dry-run')
-    args.push('comment', 'post', rec.bvid, text)
+    args.push('comment', 'post', rec.bvid)
+    if (text.startsWith('-')) args.push('--') // 防止以 - 开头的文本被 argparse 当作选项
+    args.push(text)
     for (const t of targets) args.push('--at', t.target)
     const meme = pickMeme(ri)
     if (meme) args.push('--image', meme)
