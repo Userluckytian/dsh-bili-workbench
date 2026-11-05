@@ -299,10 +299,13 @@ const SceneShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
   const lineIdx = Math.min(lines.length - 1, Math.floor((frame / Math.max(1, frames)) * lines.length));
   const line = lines[lineIdx] || { who: "L", text: "" };
   const activeL = line.who === "L";
+  // 角色名从方案里读（s.nameL / s.nameR），没配就用中性兜底——不绑定任何具体角色
+  const nameL = s.nameL || "左边";
+  const nameR = s.nameR || "右边";
   const bob = (on: boolean) => (on ? `translateY(${Math.sin(frame / 4) * 8}px) scale(1.04)` : "translateY(0) scale(1)");
   return (
     <AbsoluteFill>
-      <TopBar label="咕嘎小剧场" right={s.headline || ""} />
+      <TopBar label={s.label || "小剧场"} right={s.headline || ""} />
       <div style={{ position: "absolute", top: 150, left: 0, right: 0, textAlign: "center", fontFamily: FONT }}>
         <div style={{ display: "inline-block", padding: "10px 28px", borderRadius: 14, background: "rgba(91,140,255,0.16)", border: "1px solid rgba(91,140,255,0.5)", color: "#cfe0ff", fontSize: 34, fontWeight: 700 }}>
           {s.headline}
@@ -318,7 +321,7 @@ const SceneShot: React.FC<{ s: any; frames: number }> = ({ s, frames }) => {
         boxShadow: "0 18px 44px rgba(0,0,0,0.4)",
       }}>
         {line.text}
-        <div style={{ fontSize: 22, color: "#8593ad", marginTop: 8 }}>{activeL ? "—— 咕嘎" : "—— 小狗"}</div>
+        <div style={{ fontSize: 22, color: "#8593ad", marginTop: 8 }}>{activeL ? `—— ${nameL}` : `—— ${nameR}`}</div>
       </div>
       {/* 角色 */}
       <Img src={staticFile(s.left || "mascot/default.png")} style={{ position: "absolute", left: 170, bottom: 200, width: 300, height: 300, opacity: activeL ? 1 : 0.62, transform: bob(activeL), filter: "drop-shadow(0 16px 34px rgba(0,0,0,0.45))", transition: "opacity 200ms" }} />

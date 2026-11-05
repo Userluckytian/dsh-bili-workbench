@@ -90,7 +90,7 @@ export async function makeCover({ title, subtitle = '', kicker = '资讯盘点',
   <!-- 底线 -->
   <rect x="64" y="${H - 96}" width="120" height="6" rx="3" fill="#5B8CFF"/>
   <text x="64" y="${H - 46}" font-family="Microsoft YaHei, Noto Sans SC, sans-serif"
-        font-size="24" fill="rgba(255,255,255,0.45)">AI 生成内容 · 资讯盘点</text>
+        font-size="24" fill="rgba(255,255,255,0.45)">资讯盘点</text>
 </svg>`
 
   await sharp(Buffer.from(svg, 'utf8'))

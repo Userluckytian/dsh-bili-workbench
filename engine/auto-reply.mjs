@@ -18,7 +18,12 @@ import { composeText } from './compose-lib.mjs'
 import { ownerInfo, answerOwnerCommandDetailed, auditMessage, refusalText, todayStats } from './owner.mjs'
 import { voiceOwnerStats } from './owner-voice.mjs'
 import * as canon from './canon.mjs'
+import { loadLLM } from './llmpath.mjs'
 import { rememberIntent, apply as memoryApply, addEvent, renderRecallBlock } from './memory.mjs'
+import { handleOne as handleVideoMessage, extractVideoRefs } from './owner-task.mjs'
+
+// 熔断错误：模型链整体不可用时，本轮不该继续逐条硬打，直接结束。
+const { isStopError } = await loadLLM()
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -39,6 +44,17 @@ function ensureCall(text, call) {
   const t = String(text || '').trim()
   if (!t || !call || t.includes(call)) return t
   return `${call}，${t}`.slice(0, 120)
+}
+
+/**
+ * 主人的这条回复是不是「在说视频」：有视频上下文 + 像提问/任务。
+ * 命中就交给 owner-task 的「先看视频再回答」逻辑，而不是当普通聊天。
+ */
+function ownerVideoIntent(m) {
+  const text = String(m?.content || '')
+  const hasVideo = Boolean(m?.on?.bvid || m?.on?.url || extractVideoRefs(text).length)
+  if (!hasVideo) return false
+  return /看看|看下|分析|总结|概括|评论|弹幕|对吗|对不对|是不是|为什么|怎么|帮我|算算|这个视频|这条视频|内容|讲了|值得/.test(text)
 }
 
 async function main() {
@@ -104,6 +120,34 @@ async function main() {
         text = r.ok
           ? `${owner.call}，${r.deduped ? '这条已经记住过啦' : '记住了'}：${remember.slice(0, 40)}`
           : `${owner.call}，这条没记住（${String(r.error || '').split('\n')[0].slice(0, 40)}）`
+      } else if (ownerVideoIntent(m)) {
+        // 主人在这条视频下回复：先看视频再回答，不再当普通聊天
+        try {
+          const rec = await handleVideoMessage({
+            message: m.content || '',
+            bv: m.on?.bvid || '',
+            onUrl: m.on?.url || '',
+            rpid: m.rpid,
+            root: m.root || '',
+            dryRun,
+            source: 'reply',
+            isOwner: true,
+            uid: m.user?.mid || '',
+          })
+          if (!dryRun && rec.short) await interact.markReply(m.rpid, { text: rec.short })
+          if (rec.status === 'failed') {
+            fail++
+            log(`  ✗ ${m.rpid} 看视频失败：${rec.error}`)
+          } else {
+            ok++
+            log(`  ✓ ${m.rpid} ${dryRun ? 'dry-run' : '已回复'}（视频）：${rec.short || rec.answer || ''}`)
+          }
+        } catch (e) {
+          fail++
+          log(`  ✗ ${m.rpid} 看视频失败：${String(e?.message ?? e).split('\n')[0]}`)
+          if (isStopError(e)) { log('  模型链已熔断，本轮停止（不再逐条重试）'); break }
+        }
+        continue
       } else {
       const cmd = answerOwnerCommandDetailed(m.content)
       if (cmd) {
@@ -123,6 +167,8 @@ async function main() {
         } catch (e) {
           log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
           fail++
+          // 熔断/预算命中说明上游整体不可用，继续跑只会重复失败并放大请求量
+          if (isStopError(e)) { log('  模型链已熔断，本轮停止（不再逐条重试）'); break }
           continue
         }
       }
@@ -140,6 +186,7 @@ async function main() {
       } catch (e) {
         log(`  ✗ ${m.rpid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
         fail++
+        if (isStopError(e)) { log('  模型链已熔断，本轮停止（不再逐条重试）'); break }
         continue
       }
     }

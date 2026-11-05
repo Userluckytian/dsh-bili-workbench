@@ -12,8 +12,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 export const BILI_OP = process.env.BILI_OP_DIR
   || (existsSync(join(HERE, '..', 'bili-op', 'llm.mjs'))
-    ? join(HERE, '..', 'bili-op')
-    : join(HERE, '..', '..', 'bili-op'))
+    ? join(HERE, '..', 'bili-op')   // 包内（发布包自带 bili-op）
+    : join(HERE, '..', '..', 'bili-op'))  // 兄弟目录（源码树布局）fallback
 
 export async function loadLLM() {
   return import(pathToFileURL(join(BILI_OP, 'llm.mjs')).href)

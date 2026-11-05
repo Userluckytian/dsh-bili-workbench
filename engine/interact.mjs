@@ -23,16 +23,39 @@ const EMPTY = { daily: {}, commented: {}, replied: {}, dm: {} }
 
 export const today = () => new Date().toLocaleDateString('sv-SE')
 
-export function load() {
+// 5 秒 TTL 读缓存：列表页 isCommented/commentedMap 这类高频读不再每次全量 parse；
+// 写操作走 loadFresh() 绕过缓存，save 后也失效，保证自己进程读到最新账本。
+const LOAD_TTL = 5000
+let _cache = null
+let _cacheAt = 0
+
+function readAll() {
   try {
     const j = JSON.parse(readFileSync(file(), 'utf8'))
     return { ...EMPTY, ...j, daily: j.daily || {}, commented: j.commented || {}, replied: j.replied || {}, dm: j.dm || {} }
   } catch { return JSON.parse(JSON.stringify(EMPTY)) }
 }
 
+export function load() {
+  const now = Date.now()
+  if (_cache && now - _cacheAt < LOAD_TTL) return _cache
+  _cache = readAll()
+  _cacheAt = now
+  return _cache
+}
+
+/** 写操作前用：强制重读一次，绕开 TTL 缓存 */
+function loadFresh() {
+  _cache = null
+  _cacheAt = 0
+  return load()
+}
+
 function save(db) {
   mkdirSync(dirname(file()), { recursive: true })
   writeFileSync(file(), JSON.stringify(db, null, 2), 'utf8')
+  _cache = null
+  _cacheAt = 0
   return db
 }
 
@@ -57,7 +80,7 @@ function bump(db, kind) {
 // 写操作全部走 withLock（<store>/memory/.lock 目录锁，跨进程互斥），避免并发 load→改→save 丢更新
 export function markComment(bv, { rpid = 0, text = '' } = {}) {
   return withLock(async () => {
-    const db = load()
+    const db = loadFresh()
     db.commented[String(bv)] = { at: new Date().toISOString(), rpid, text: String(text).slice(0, 200) }
     bump(db, 'comments')
     return save(db)
@@ -66,7 +89,7 @@ export function markComment(bv, { rpid = 0, text = '' } = {}) {
 
 export function markReply(rpid, { text = '' } = {}) {
   return withLock(async () => {
-    const db = load()
+    const db = loadFresh()
     db.replied[String(rpid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
     bump(db, 'replies')
     return save(db)
@@ -75,7 +98,7 @@ export function markReply(rpid, { text = '' } = {}) {
 
 export function markDm(uid, { text = '' } = {}) {
   return withLock(async () => {
-    const db = load()
+    const db = loadFresh()
     db.dm[String(uid)] = { at: new Date().toISOString(), text: String(text).slice(0, 200) }
     bump(db, 'dms')
     return save(db)

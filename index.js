@@ -11,15 +11,15 @@
 import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, statSync,
-  createReadStream, unlinkSync, cpSync,
+  createReadStream, createWriteStream, unlinkSync, cpSync,
 } from 'node:fs'
-import { join, dirname, resolve, sep, isAbsolute } from 'node:path'
+import { join, dirname, resolve, sep, isAbsolute, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { runBili, fetchCover } from './engine/bili.mjs'
+import { runBiliAsync, fetchCover, biliBin } from './engine/bili.mjs'
 import {
   list as storeList, get as storeGet, stats as storeStats, STORE, paths as storePaths,
-  setStoreRoot, defaultStorePath, locationFile,
+  setStoreRoot, defaultStorePath, locationFile, assetsRoot, todayCount as storeTodayCount,
 } from './engine/store.mjs'
 import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
@@ -29,6 +29,10 @@ import { answerOwnerCommandDetailed, auditMessage, refusalText, mentionTargets, 
 import { voiceOwnerStats } from './engine/owner-voice.mjs'
 import * as canon from './engine/canon.mjs'
 import * as memory from './engine/memory.mjs'
+import * as genStore from './engine/generation/jobstore.mjs'
+import { cancelUpstream as cancelGenUpstream } from './engine/generation/fal.mjs'
+import { deriveBlueprint, applyBlueprint } from './engine/blueprint.mjs'
+import * as prod from './engine/production.mjs'
 import { runReflect } from './engine/reflect.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -36,6 +40,13 @@ const ENGINE = join(HERE, 'engine')
 const BILI_OP = process.env.BILI_OP_DIR
   || (existsSync(join(HERE, 'bili-op', 'build.mjs')) ? join(HERE, 'bili-op') : join(HERE, '..', 'bili-op'))
 const configFile = () => join(STORE, 'config.json')
+
+/** 路径安全：文件名/runId 禁止含路径分隔符、.. 或为空（防路径穿越） */
+function safeName(s) {
+  const v = String(s ?? '').trim()
+  if (!v || /[\\/]|\.\./.test(v)) return ''
+  return v
+}
 const scheduleFile = () => join(STORE, 'schedule.json')
 const logFile = () => join(STORE, 'duty.log')
 
@@ -46,14 +57,28 @@ const BV_RE = /^BV[0-9A-Za-z]{10}$/
 const ZONES = new Set(['all', 'anime', 'music', 'dance', 'game', 'knowledge', 'tech', 'sports', 'car',
   'life', 'food', 'animal', 'kichiku', 'fashion', 'ent', 'film', 'original', 'rookie'])
 const TIERS = new Set(['值得看', '可以看', '跳过'])
-const VOICES = new Set(['zh-CN-XiaoxiaoNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunxiaNeural', 'zh-CN-YunxiNeural'])
+const VOICES = new Set(['zh-CN-XiaoxiaoNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunxiaNeural', 'zh-CN-YunxiNeural',
+  'zh-CN-YunyangNeural', 'zh-CN-YunjianNeural',
+  'zh-TW-HsiaoChenNeural', 'zh-TW-HsiaoYuNeural', 'zh-TW-YunJheNeural'])
 
+// 2026-11-05：按 40080 当前 /v1/models 重拉。旧链路里的 qw2api/*、mmxproxy/*、
+// loomy/* 已不在上游目录（model_not_found），全部移除。
+// 顺序按实测可用性排：pulse / deepseek / glm 优先；beam-free 有地区限制放最后。
 const DEFAULT_CHAIN = [
-  'deepseek-v4.1-flash', 'big-pickle', 'glm-5.3-flash', 'jev-1.13',
-  'lobsterai/deepseek-flash', 'loomy/DeepSeek-V4.1-Flash',
+  'pulse-alpha-free', 'deepseek-v4.1-flash-free', 'glm-5.3-flash-free',
+  'mimo-v2.6-flash-free', 'big-pickle', 'nemotron-3.5-lightning-free',
+  'nemotron-3.5-super-vl-free', 'crouton-alpha-free', 'flint-40b-free',
+  'beam-free',
 ]
 
-const DEFAULT_PERSONA = '生在红旗下，长在春风里；相信富强、自由、民主、希望。说话积极、有底气、不阴阳怪气；夸要夸到点上，批评也讲道理。'
+// 识图子智能体的链：2026-11-05 实测真能吃图且本机可用的 5 个。
+// crouton-alpha-free 虽然声明支持图，但本机 403（地区限制），不进默认。
+const DEFAULT_VISION_CHAIN = [
+  'pulse-alpha-free', 'deepseek-v4.1-flash-free', 'glm-5.3-flash-free',
+  'mimo-v2.6-flash-free', 'nemotron-3.5-super-vl-free',
+]
+
+const DEFAULT_PERSONA = '用自然、友好的口吻说话，像个懂视频的热心观众；夸要具体，批评讲道理。'
 
 const DEFAULTS = {
   enabled: false,
@@ -81,6 +106,7 @@ const DEFAULTS = {
   autoComment: false,
   autoReply: false,
   ownerUid: '',                  // 主人 B站 UID；只有这个 UID 的指令会被特殊处理
+  ownerUids: [],                 // 额外主人 UID（数组；ownerUid 永远算），用于多账号
   ownerCall: '老弟',              // 评论/回复里怎么称呼主人
   mentionName: '',               // 额外 @ 谁；留空=主人 UID / 当前登录账号
   mentions: [],                  // [{ target: UID/昵称, call: 称呼 }]，可多人
@@ -92,17 +118,33 @@ const DEFAULTS = {
   ownerTaskPerDay: 10,           // 每天最多处理几个
   ownerTaskAllowDm: true,        // 长总结用私信交付
   ownerTaskMaxAgeHours: 72,      // 只处理 72 小时内的 @，避免首次启动把旧消息全跑一遍
+  // 公开版默认关：陌生人 @ 会真的在评论区回话，属于对外可见行为，
+  // 新装用户应当自己判断要不要开（设置 → 互动 → 别人 @ 它）。
+  publicMentionsEnabled: false,  // 非主人 @ 也先看视频再回答（评论区短答，不私信）
+  publicMentionPerDay: 20,       // 非主人 @ 每日上限（0=关）
+  mentionVision: true,           // @ 任务抽帧看画面（视觉模型）
   dmWatch: false,
   dmWatchMinutes: 5,
   dmReplyPerDay: 0,              // 0 = 不限条数（仍只回主人/互关）
   dmOwnerUid: '',
   /* 出片 */
   voice: 'zh-CN-YunxiNeural',
+  /* 生成服务（本地 fal.ai 代理 / 任意 OpenAI 兼容端点） */
+  generation: {
+    enabled: true,
+    baseUrl: 'http://127.0.0.1:30001/v1',
+    t2i: 'fal-flux-schnell',
+    i2i: 'flux-dev-i2i',
+    t2v: 'ltx-video',
+    i2v: 'ltx-video-i2v',
+  },
   modelChain: DEFAULT_CHAIN,
+  // 识图子智能体的模型链（独立于主链）：只有声明支持图片的模型才有意义
+  visionChain: [...DEFAULT_VISION_CHAIN],
   concurrency: 4,
   /* 发布 */
   publishEnabled: false,
-  defaultTags: ['AI', '资讯', '盘点'],
+  defaultTags: ['资讯', '盘点'],
   defaultZone: 0,
 }
 
@@ -179,7 +221,8 @@ function targetToday(cfg, d = new Date()) {
   return Math.min(cfg.perDay, Math.round(cfg.perDay * p.elapsed / p.total))
 }
 
-const collectedToday = () => storeList({ limit: 2000 }).filter((r) => localDay(r.fetchedAt) === today()).length
+// 走 store.mjs 的 30 秒按日缓存：/config 高频轮询不再每次全量扫盘
+const collectedToday = () => storeTodayCount()
 
 function normalizeCfg(c) {
   const out = { ...DEFAULTS, ...(c || {}) }
@@ -208,6 +251,10 @@ function normalizeCfg(c) {
   out.autoComment = out.autoComment !== false
   out.autoReply = out.autoReply !== false
   out.ownerUid = String(out.ownerUid || '').trim().slice(0, 20)
+  out.ownerUids = (Array.isArray(out.ownerUids) ? out.ownerUids : String(out.ownerUids || '').split(/[\s,，]+/))
+    .map((x) => String(x?.uid || x || '').trim().slice(0, 20))
+    .filter(Boolean)
+    .slice(0, 5)
   out.ownerCall = String(out.ownerCall || '老弟').trim().slice(0, 10) || '老弟'
   out.mentionName = String(out.mentionName || '').slice(0, 40)
   out.mentions = (Array.isArray(out.mentions) ? out.mentions : [])
@@ -221,30 +268,63 @@ function normalizeCfg(c) {
   out.ownerTaskPerDay = clampNum(out.ownerTaskPerDay, 1, 50, 10)
   out.ownerTaskAllowDm = out.ownerTaskAllowDm !== false
   out.ownerTaskMaxAgeHours = clampNum(out.ownerTaskMaxAgeHours, 1, 720, 72)
+  out.publicMentionsEnabled = out.publicMentionsEnabled !== false
+  out.publicMentionPerDay = clampNum(out.publicMentionPerDay, 0, 100, 20)
+  out.mentionVision = out.mentionVision !== false
   out.dmWatch = Boolean(out.dmWatch)
   out.dmWatchMinutes = clampNum(out.dmWatchMinutes, 3, 240, 5)
   out.dmReplyPerDay = clampNum(out.dmReplyPerDay, 0, 100, 0)
   out.dmOwnerUid = String(out.dmOwnerUid || '').slice(0, 30)
-  out.voice = VOICES.has(out.voice) ? out.voice : 'zh-CN-YunxiNeural'
+  const voice = String(out.voice || '').trim()
+  out.voice = (VOICES.has(voice) || /^[a-zA-Z0-9][a-zA-Z0-9-]{1,39}$/.test(voice)) ? voice : 'zh-CN-YunxiNeural'
   out.modelChain = (Array.isArray(out.modelChain) ? out.modelChain : String(out.modelChain || '').split(','))
     .map((s) => String(s).trim()).filter(Boolean).slice(0, 12)
   if (!out.modelChain.length) out.modelChain = [...DEFAULT_CHAIN]
+  out.visionChain = (Array.isArray(out.visionChain) ? out.visionChain : String(out.visionChain || '').split(','))
+    .map((s) => String(s).trim()).filter(Boolean).slice(0, 8)
+  if (!out.visionChain.length) out.visionChain = [...DEFAULT_VISION_CHAIN]
   out.concurrency = clampNum(out.concurrency, 1, 8, 4)
+  const gen = out.generation && typeof out.generation === 'object' ? out.generation : {}
+  out.generation = {
+    enabled: gen.enabled !== false,
+    baseUrl: String(gen.baseUrl || 'http://127.0.0.1:30001/v1').trim().replace(/\/+$/, '') || 'http://127.0.0.1:30001/v1',
+    t2i: String(gen.t2i || 'fal-flux-schnell').slice(0, 80),
+    i2i: String(gen.i2i || 'flux-dev-i2i').slice(0, 80),
+    t2v: String(gen.t2v || 'ltx-video').slice(0, 80),
+    i2v: String(gen.i2v || 'ltx-video-i2v').slice(0, 80),
+  }
   out.publishEnabled = Boolean(out.publishEnabled)
   out.defaultTags = (Array.isArray(out.defaultTags) ? out.defaultTags : String(out.defaultTags || '').split(','))
     .map((s) => String(s).trim()).filter(Boolean).slice(0, 10)
-  if (!out.defaultTags.length) out.defaultTags = ['AI', '资讯', '盘点']
+  if (!out.defaultTags.length) out.defaultTags = ['资讯', '盘点']
   out.defaultZone = clampNum(out.defaultZone, 0, 9999, 0)
   return out
 }
 
 const loadCfg = () => normalizeCfg(readJson(configFile(), {}))
+/** 任何回传前端的配置都必须过这层：密钥用占位符代替，不回传明文 */
+const publicCfg = (cfg) => ({ ...cfg, llmKey: cfg.llmKey ? '__SAVED__' : '' })
 const saveCfg = (patch) => {
-  const cfg = normalizeCfg({ ...loadCfg(), ...patch })
+  const before = loadCfg()
+  const cfg = normalizeCfg({ ...before, ...patch })
   writeJson(configFile(), cfg)
+  // 换了模型链/密钥 = 用户主动改了上游配置，解除「永久熔断」，允许重新试一次
+  const chainChanged = JSON.stringify(before.modelChain) !== JSON.stringify(cfg.modelChain)
+  if (chainChanged || before.llmKey !== cfg.llmKey) resetLlmBreaker()
   return cfg
 }
 const loadSched = () => readJson(scheduleFile(), { lastRunAt: '', lastResult: '' })
+
+/* ───────────── 文本模型端点（40080）───────────── */
+const llmBase = () => String(process.env.BILI_OP_LLM_BASE || 'http://127.0.0.1:40080/v1').replace(/\/+$/, '')
+const llmKeyValue = () => String(process.env.OC_API_KEY || process.env.BILI_OP_LLM_KEY || loadCfg().llmKey || '')
+const llmBreakerFile = () => join(STORE, 'llm_breaker.json')
+function resetLlmBreaker() {
+  try { if (existsSync(llmBreakerFile())) unlinkSync(llmBreakerFile()) } catch { /* 删不掉不影响主流程 */ }
+}
+function readLlmBreaker() {
+  try { return JSON.parse(readFileSync(llmBreakerFile(), 'utf8')) } catch { return {} }
+}
 
 /** 跑引擎脚本（子进程），返回输出尾巴 */
 function runEngine(script, args = [], timeoutMs = 20 * 60_000, extraEnv = null) {
@@ -255,6 +335,7 @@ function runEngine(script, args = [], timeoutMs = 20 * 60_000, extraEnv = null) 
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
       BILI_OP_MODELS: cfg.modelChain.join(','),
+      BILI_OP_VISION_MODELS: cfg.visionChain.join(','),
     }
     if (extraEnv) Object.assign(env, extraEnv)
     if (cfg.personaPrompt) env.BILI_OP_PERSONA = cfg.personaPrompt
@@ -282,7 +363,11 @@ function runEngine(script, args = [], timeoutMs = 20 * 60_000, extraEnv = null) 
 /** 跑 bili-op 里的脚本（目前只用于 --health） */
 function runOp(script, args = [], timeoutMs = 60_000) {
   const cfg = loadCfg()
-  const env = { ...process.env, BILI_OP_MODELS: cfg.modelChain.join(',') }
+  const env = {
+    ...process.env,
+    BILI_OP_MODELS: cfg.modelChain.join(','),
+    BILI_OP_VISION_MODELS: cfg.visionChain.join(','),
+  }
   if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
   return new Promise((resolvePromise) => {
     const r = spawnSync(process.execPath, [join(BILI_OP, script), ...args], { cwd: BILI_OP, env, encoding: 'utf8', timeout: timeoutMs, windowsHide: true })
@@ -292,6 +377,36 @@ function runOp(script, args = [], timeoutMs = 60_000) {
 
 let roundRunning = false
 let taskRunning = false
+
+/* ════ 采音色后台任务（⑦）：spawn 子进程跑 yt-dlp + demucs，不阻塞宿主 ════ */
+const HARVEST_MAX_CONCURRENT = 2
+const HARVEST_RETAIN_MS = 30 * 60_000 // 任务完成 30 分钟后从表里清掉
+const harvestJobs = new Map() // taskId → { state, error, file, promptText, name, bv, startedAt, finishedAt, child }
+let harvestTaskSeq = 0
+
+/** 任务结束 30 分钟后从表里清掉，防止 Map 无限涨 */
+function scheduleHarvestCleanup(taskId) {
+  setTimeout(() => harvestJobs.delete(taskId), HARVEST_RETAIN_MS).unref()
+}
+
+function harvestRunningCount() {
+  let n = 0
+  for (const j of harvestJobs.values()) if (j.state === 'running') n++
+  return n
+}
+
+/** 启动前环境预检：缺了直接 failed，秒回不白等。返回 null 或错误提示 */
+function harvestEnvCheck() {
+  const sovitsPy = process.platform === 'win32'
+    ? join(HERE, '..', 'refs', 'GPT-SoVITS', '.venv', 'Scripts', 'python.exe')
+    : join(HERE, '..', 'refs', 'GPT-SoVITS', '.venv', 'bin', 'python')
+  if (!existsSync(sovitsPy)) return 'GPT-SoVITS 环境未安装（缺少 refs/GPT-SoVITS/.venv），请先安装 demucs 所需环境'
+  const yd = spawnSync('yt-dlp', ['--version'], { timeout: 15_000, windowsHide: true, encoding: 'utf8' })
+  if (yd.error || yd.status !== 0) return 'yt-dlp 不可用（未安装或不在 PATH）：pip install -U yt-dlp'
+  const bili = spawnSync(biliBin(), ['--version'], { timeout: 15_000, windowsHide: true, encoding: 'utf8' })
+  if (bili.error) return '未找到 bili 命令（bili CLI）：pip install bili-agent 或 uv tool install bili-agent'
+  return null
+}
 
 /** 后台跑一个长任务（不阻塞 HTTP / 定时器） */
 function kickTask(id = '') {
@@ -425,7 +540,7 @@ async function applyAutoFavorite(cfg) {
   const targets = storeList({ limit: 30 }).filter((r) =>
     r.judge?.tier === '值得看' && !marked[r.bvid] && localDay(r.judge?.at) === today())
   for (const r of targets.slice(0, 5)) {
-    const res = runBili(['video', 'fav', r.bvid, '--folder', cfg.favFolderId], { timeoutMs: 30000 })
+    const res = await runBiliAsync(['video', 'fav', r.bvid, '--folder', cfg.favFolderId], { timeoutMs: 30000 })
     if (res.ok) {
       marked[r.bvid] = new Date().toISOString()
       writeJson(configFile(), { ...loadCfg(), favMarked: marked })
@@ -439,6 +554,8 @@ async function applyAutoFavorite(cfg) {
 
 /* ───────────── 渲染任务（内存） ───────────── */
 const jobs = new Map()
+let ownerTaskRunning = false
+let ownerTaskLast = 0
 
 function pctFromLine(line, job) {
   if (/①/.test(line)) return 6
@@ -464,12 +581,133 @@ function pctFromLine(line, job) {
   return null
 }
 
+function killTree(child) {
+  if (!child) return
+  try {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    else child.kill('SIGTERM')
+  } catch {
+    try { child.kill() } catch { /* ignore */ }
+  }
+}
+
+/* ───────────── 生成任务调度（worker 子进程） ───────────── */
+const genRunning = new Map() // jobId -> { child, kind }
+const GEN_LIMITS = { image: 4, video: 1 }
+const GEN_WORKER = join(ENGINE, 'generation', 'worker.mjs')
+const ASSEMBLY_WORKER = join(ENGINE, 'production', 'assemble.mjs')
+const assemblyRunning = new Map() // runId -> child
+
+function genEnv() {
+  localNoProxy()
+  return {
+    ...process.env,
+    PYTHONUTF8: '1',
+    BILI_STORE: STORE,
+    BILI_ASSETS: assetsRoot(),
+    NO_PROXY: process.env.NO_PROXY || '',
+    no_proxy: process.env.no_proxy || '',
+  }
+}
+
+function startGenJob(job) {
+  if (!existsSync(GEN_WORKER)) {
+    genStore.updateJob(job.id, { status: 'failed', stage: '失败', error: '缺少 generation/worker.mjs' })
+    return
+  }
+  let child
+  try {
+    child = spawn(process.execPath, [GEN_WORKER, '--job', job.id], {
+      cwd: HERE,
+      env: genEnv(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (e) {
+    genStore.updateJob(job.id, { status: 'failed', stage: '失败', error: String(e?.message ?? e) })
+    return
+  }
+  genRunning.set(job.id, { child, kind: job.kind })
+  genStore.updateJob(job.id, { status: 'running', stage: '启动中', childPid: child.pid })
+  let tail = ''
+  const take = (buf) => { tail = (tail + String(buf)).slice(-4000) }
+  child.stdout?.on('data', take)
+  child.stderr?.on('data', take)
+  const done = () => {
+    genRunning.delete(job.id)
+    const cur = genStore.readJob(job.id)
+    if (cur && ['queued', 'running'].includes(cur.status)) {
+      genStore.updateJob(job.id, {
+        status: 'failed',
+        stage: '失败',
+        error: (tail.trim() || 'worker 提前退出').slice(-2000),
+        endedAt: new Date().toISOString(),
+      })
+    }
+    pumpGen()
+  }
+  child.once('error', (e) => {
+    tail = (tail + '\n' + String(e?.message ?? e)).slice(-4000)
+    done()
+  })
+  child.once('exit', done)
+}
+
+function pumpGen() {
+  let rows = []
+  try { rows = genStore.listJobs(500) } catch { return }
+  const live = new Set(genRunning.keys())
+  for (const j of rows) {
+    if (j.status === 'running' && !live.has(j.id)) {
+      genStore.updateJob(j.id, {
+        status: 'interrupted', stage: '已中断', error: '任务进程已退出；可重试',
+        endedAt: new Date().toISOString(),
+      })
+    }
+  }
+  const counts = { image: 0, video: 0 }
+  for (const v of genRunning.values()) counts[v.kind] = (counts[v.kind] || 0) + 1
+  const queued = rows
+    .filter((j) => j.status === 'queued')
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0) || String(a.createdAt).localeCompare(String(b.createdAt)))
+  for (const j of queued) {
+    const limit = GEN_LIMITS[j.kind] || 1
+    if ((counts[j.kind] || 0) >= limit) continue
+    startGenJob(j)
+    counts[j.kind] = (counts[j.kind] || 0) + 1
+  }
+}
+
+async function cancelGenJob(id) {
+  const cur = genStore.readJob(id)
+  if (!cur) return null
+  if (cur.upstreamJobId) {
+    try { await cancelGenUpstream(cur.baseUrl || generationBase(), cur.upstreamJobId) } catch { /* best effort */ }
+  }
+  const running = genRunning.get(id)
+  if (running) {
+    genStore.updateJob(id, {
+      status: 'cancelled', stage: '已取消', error: '已手动取消',
+      endedAt: new Date().toISOString(),
+    })
+    killTree(running.child)
+    genRunning.delete(id)
+    pumpGen()
+  } else {
+    genStore.cancelJob(id)
+  }
+  return genStore.readJob(id)
+}
+
+
 function startRender(project, plan, version, voice) {
   const { runId, runDir, frameCount } = renders.prepareRun(project, plan, version)
   const cfg = loadCfg()
+  const usedVoice = String(voice || cfg.voice || '').trim() || cfg.voice
   const job = {
     runId, runDir, projectId: project.id, version: Number(version) || project.currentVersion,
     stage: 'running', pct: 3, log: '', error: '', startedAt: new Date().toISOString(), endedAt: '',
+    cancelled: false, child: null,
     totalShots: (plan.shots || []).length, frameCount,
   }
   jobs.set(runId, job)
@@ -477,19 +715,21 @@ function startRender(project, plan, version, voice) {
   project.stage = 'rendering'
   project.runDir = runDir
   project.renderVersion = Number(version) || project.currentVersion
-  project.renderVoice = cfg.voice
+  project.renderVoice = usedVoice
   plans.saveProject(project)
 
   const env = {
     ...process.env,
     PYTHONUTF8: '1',
     BILI_OP_MODELS: cfg.modelChain.join(','),
+    BILI_OP_VISION_MODELS: cfg.visionChain.join(','),
   }
   if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
 
   const child = spawn(process.execPath, [
-    join(BILI_OP, 'build.mjs'), '--run', runDir, '--burn', '--voice', cfg.voice,
+    join(BILI_OP, 'build.mjs'), '--run', runDir, '--burn', '--voice', usedVoice,
   ], { cwd: BILI_OP, env, windowsHide: true })
+  job.child = child
 
   let buf = ''
   const onData = (b) => {
@@ -505,13 +745,24 @@ function startRender(project, plan, version, voice) {
   child.stdout?.on('data', onData)
   child.stderr?.on('data', onData)
   child.on('error', (e) => {
+    job.child = null
+    if (job.cancelled) return
     job.stage = 'failed'
     job.error = String(e?.message ?? e)
     job.endedAt = new Date().toISOString()
     log(`出片失败 ${runId}：${job.error}`)
   })
   child.on('close', (code) => {
+    job.child = null
     job.endedAt = new Date().toISOString()
+    const purge = () => { const t = setTimeout(() => jobs.delete(runId), 10 * 60_000); t.unref?.() }
+    if (job.cancelled) {
+      job.stage = 'cancelled'
+      job.error = '已手动取消'
+      purge()
+      log(`渲染已取消 ${runId}`)
+      return
+    }
     if (code === 0) {
       job.stage = 'done'
       job.pct = 100
@@ -557,6 +808,21 @@ const activeJob = (projectId) => {
   return null
 }
 
+/* ───────────── 生成服务（本地 fal.ai 代理 / OpenAI 兼容） ───────────── */
+function localNoProxy() {
+  const add = ['127.0.0.1', 'localhost', '::1']
+  for (const key of ['NO_PROXY', 'no_proxy']) {
+    const cur = String(process.env[key] || '')
+    const parts = cur.split(',').map((s) => s.trim()).filter(Boolean)
+    for (const a of add) if (!parts.includes(a)) parts.push(a)
+    process.env[key] = parts.join(',')
+  }
+}
+function generationBase() {
+  const g = loadCfg().generation || {}
+  return String(g.baseUrl || 'http://127.0.0.1:30001/v1').replace(/\/+$/, '')
+}
+
 /* ───────────── HTTP ───────────── */
 export function apply(ctx) {
   const sendJson = (res, code, obj) => {
@@ -585,7 +851,7 @@ export function apply(ctx) {
 
     /* ══════════ 账号：登录 / 状态 ══════════ */
     if (req.method === 'GET' && path === '/status') {
-      const r = await runBili(['auth', 'status'], { timeoutMs: 20000 })
+      const r = await runBiliAsync(['auth', 'status'], { timeoutMs: 20000 })
       const d = r.data || {}
       return sendJson(res, 200, {
         ok: true, loggedIn: Boolean(d.logged_in), user: d.user || null,
@@ -593,7 +859,7 @@ export function apply(ctx) {
       })
     }
     if (req.method === 'POST' && path === '/login/start') {
-      const r = await runBili(['auth', 'login'], { timeoutMs: 40000 })
+      const r = await runBiliAsync(['auth', 'login'], { timeoutMs: 40000 })
       const d = r.data || {}
       if (d.qr_image) lastQrImage = String(d.qr_image)
       return sendJson(res, 200, {
@@ -613,7 +879,7 @@ export function apply(ctx) {
       } catch (e) { res.writeHead(500); return res.end(String(e?.message ?? e)) }
     }
     if (req.method === 'POST' && path === '/logout') {
-      const r = await runBili(['auth', 'logout'], { timeoutMs: 20000 })
+      const r = await runBiliAsync(['auth', 'logout'], { timeoutMs: 20000 })
       lastQrImage = ''
       return sendJson(res, 200, { ok: r.ok, error: r.error || null })
     }
@@ -627,7 +893,7 @@ export function apply(ctx) {
       const args = kind === 'rank'
         ? ['hot', 'rank', '--zone', zone, '--limit', String(size)]
         : ['hot', 'popular', '--size', String(size)]
-      const r = await runBili(args, { timeoutMs: 40000 })
+      const r = await runBiliAsync(args, { timeoutMs: 40000 })
       return sendJson(res, 200, { ok: r.ok, kind, zone, items: r.data?.items || [], error: r.error || null })
     }
     if (req.method === 'GET' && path === '/search') {
@@ -635,22 +901,50 @@ export function apply(ctx) {
       if (!kw) return sendJson(res, 200, { ok: true, items: [], keyword: '' })
       const size = Math.max(1, Math.min(Number(q.get('size')) || 20, 50))
       const order = ['default', 'views', 'new', 'danmaku', 'favorites', 'comments'].includes(String(q.get('order'))) ? String(q.get('order')) : 'default'
-      const r = await runBili(['search', 'video', kw, '--order', order, '--size', String(size)], { timeoutMs: 45000 })
+      const r = await runBiliAsync(['search', 'video', kw, '--order', order, '--size', String(size)], { timeoutMs: 45000 })
       return sendJson(res, 200, { ok: r.ok, keyword: kw, total: r.data?.total || 0, items: r.data?.items || [], error: r.error || null })
     }
     if (req.method === 'GET' && path === '/video') {
       const bv = String(q.get('bv') || '').trim()
       if (!BV_RE.test(bv)) return sendJson(res, 200, { ok: false, hint: 'BV 号不对' })
       const chars = Math.max(300, Math.min(Number(q.get('chars')) || 3000, 20000))
-      const r = await runBili(['video', 'watch', bv, '--max-chars', String(chars)], { timeoutMs: 120000 })
+      const r = await runBiliAsync(['video', 'watch', bv, '--max-chars', String(chars)], { timeoutMs: 120000 })
       if (r.ok) {
         runEngine('collect.mjs', [bv, '--frames', '10']).then((x) => { if (!x.ok) log('顺手落库失败：' + x.text.slice(-200)) })
       }
       return sendJson(res, 200, { ok: r.ok, data: r.data || null, error: r.error || null })
     }
     if (req.method === 'GET' && path === '/stats') {
-      const r = await runBili(['me', 'stats'], { timeoutMs: 40000 })
+      const r = await runBiliAsync(['me', 'stats'], { timeoutMs: 40000 })
       return sendJson(res, 200, { ok: r.ok, data: r.data || null, error: r.error || null })
+    }
+
+    /* 环境自检：bili / ffmpeg / yt-dlp / 模型 / 素材库 / 声音克隆环境 */
+    if (req.method === 'GET' && path === '/doctor') {
+      const checks = {}
+      const probe = (bin, args) => {
+        const r = spawnSync(bin, args, { encoding: 'utf8', timeout: 15000, windowsHide: true })
+        if (r.error) return { ok: false, detail: `未找到 ${bin} 命令` }
+        return { ok: r.status === 0, detail: String(r.stdout || r.stderr || '').split(/\r?\n/)[0].slice(0, 120) }
+      }
+      // bili CLI：用 auth status 探测；bili-missing 说明命令本身不在
+      const rb = await runBiliAsync(['auth', 'status'], { timeoutMs: 20000 })
+      checks.bili = rb.error?.code === 'bili-missing'
+        ? { ok: false, detail: rb.error.message }
+        : { ok: rb.ok, detail: rb.ok ? 'bili 命令可用' : (rb.error?.message || rb.error?.code || 'auth status 失败（可能只是未登录）') }
+      checks.ffmpeg = probe('ffmpeg', ['-version'])
+      checks.ytdlp = probe('yt-dlp', ['--version'])
+      const rl = await runOp('gen.mjs', ['--health'], 30000)
+      checks.llm = { ok: rl.ok, detail: rl.ok ? '模型服务可达' : (rl.text || rl.error || '健康检查失败').slice(-200) }
+      const root = assetsRoot()
+      checks.assets = {}
+      for (const k of ['bgm', 'voices', 'memes', 'stickers', 'clips']) {
+        const d = join(root, k === 'memes' ? join('memes', 'bili-emotes') : k === 'stickers' ? join('stickers', 'openmoji', 'png-618x618-color') : k)
+        checks.assets[k] = existsSync(d)
+      }
+      const sovits = resolve(HERE, '..', 'refs', 'GPT-SoVITS', '.venv')
+      checks.sovits = { ok: existsSync(sovits), detail: sovits }
+      return sendJson(res, 200, { ok: true, checks })
     }
 
     /* 封面代理：热门/搜索卡片用 */
@@ -664,8 +958,8 @@ export function apply(ctx) {
     }
     if (req.method === 'GET' && path === '/inbox') {
       const [inbox, replies] = await Promise.all([
-        runBili(['feed', 'inbox'], { timeoutMs: 30000 }),
-        runBili(['feed', 'replies', '--limit', '12'], { timeoutMs: 30000 }),
+        runBiliAsync(['feed', 'inbox'], { timeoutMs: 30000 }),
+        runBiliAsync(['feed', 'replies', '--limit', '12'], { timeoutMs: 30000 }),
       ])
       return sendJson(res, 200, {
         ok: true, counts: inbox.data?.unread || null, note: inbox.data?.note || '',
@@ -678,22 +972,31 @@ export function apply(ctx) {
       const tier = String(q.get('tier') || '')
       const kw = String(q.get('q') || '').trim()
       const limit = Math.max(1, Math.min(Number(q.get('limit')) || 100, 500))
-      let rows = storeList({ limit: 2000 })
-      if (TIERS.has(tier)) rows = rows.filter((r) => (r.judge?.tier || '未判定') === tier)
+      const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(q.get('pageSize') || '50', 10) || 50))
+      const rows = storeList({ limit: 2000 })
+      let filtered = rows
+      if (TIERS.has(tier)) filtered = filtered.filter((r) => (r.judge?.tier || '未判定') === tier)
       if (kw) {
         const k = kw.toLowerCase()
-        rows = rows.filter((r) => String(r.title || '').toLowerCase().includes(k)
+        filtered = filtered.filter((r) => String(r.title || '').toLowerCase().includes(k)
           || String(r.up?.name || '').toLowerCase().includes(k)
           || String(r.judge?.why || '').toLowerCase().includes(k)
           || (r.quotes || []).some((x) => String(x.text || '').toLowerCase().includes(k)))
       }
-      rows = rows.slice(0, limit)
-      const slim = rows.map(({ subtitle, ...rest }) => ({
+      const total = filtered.length
+      // 先排序切片再 slim：只对当前页做重活；互动状态用一次快照批量标注，不逐条全量 parse
+      const commented = interact.commentedMap()
+      const pageRows = filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+      const legacyLimitRows = (q.get('page') === null && q.get('pageSize') === null)
+        ? filtered.slice(0, limit) : pageRows
+      const slim = legacyLimitRows.map(({ subtitle, quotes, ...rest }) => ({
         ...rest,
-        commented: interact.isCommented(rest.bvid),
-        subtitle: subtitle ? { lang: subtitle.lang, chars: subtitle.chars, items: subtitle.items, missing: subtitle.missing || '' } : null,
+        commented: Boolean(commented[String(rest.bvid || '')]),
+        quotes: (quotes || []).slice(0, 3),
+        subtitle: subtitle ? { lang: subtitle.lang, chars: subtitle.chars, missing: subtitle.missing || '' } : null,
       }))
-      return sendJson(res, 200, { ok: true, rows: slim, total: rows.length, stats: storeStats(), ranges: parseRanges(loadCfg().scheduleRanges).length })
+      return sendJson(res, 200, { ok: true, rows: slim, total, page, pageSize, stats: storeStats(), ranges: parseRanges(loadCfg().scheduleRanges).length })
     }
     if (req.method === 'GET' && path === '/store/item') {
       const bv = String(q.get('bv') || '')
@@ -810,6 +1113,7 @@ export function apply(ctx) {
           plan: plan ? {
             title: plan.title, subtitle: plan.subtitle, angle: plan.angle, brief: plan.brief,
             picks: plan.picks || [], shots: plan.shots || [], stats: plan.stats || {}, model: plan.model,
+            blueprint: plan.blueprint ? { approvedAt: plan.blueprint.approvedAt || '' } : null,
           } : null,
           job: jobView(job),
         }
@@ -1004,12 +1308,34 @@ export function apply(ctx) {
         plan = plans.getVersion(project.id, 1)
       }
       if (activeJob(project.id)) return sendJson(res, 200, { ok: false, error: '这个项目正在渲染' })
+      if (plan.blueprint && !plan.blueprint.approvedAt) {
+        return sendJson(res, 200, { ok: false, error: '先在「方案蓝图」里点确认，再开始渲染' })
+      }
+      if (!Array.isArray(plan.shots) || !plan.shots.length) {
+        return sendJson(res, 200, { ok: false, error: '分镜没有参与渲染的镜头：到「方案蓝图 → 分镜与镜头表」把镜头标回「参与」' })
+      }
       try {
-        const job = startRender(project, plan, v, body.voice)
+        const job = startRender(project, plan, v, body.voice || project.renderVoice)
         return sendJson(res, 200, { ok: true, job: jobView(job) })
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
       }
+    }
+    if (req.method === 'POST' && path === '/render/cancel') {
+      const body = await readBody(req)
+      const runId = String(body.runId || '')
+      const job = jobs.get(runId)
+      if (!job) return sendJson(res, 200, { ok: false, error: '没有这个渲染任务' })
+      if (job.stage !== 'running') return sendJson(res, 200, { ok: false, error: '任务已经结束' })
+      job.cancelled = true
+      killTree(job.child)
+      job.stage = 'cancelled'
+      job.error = '已手动取消'
+      job.endedAt = new Date().toISOString()
+      const fresh = plans.getProject(job.projectId)
+      if (fresh) { fresh.stage = 'draft'; plans.saveProject(fresh) }
+      log(`渲染已取消 ${runId}`)
+      return sendJson(res, 200, { ok: true })
     }
     if (req.method === 'GET' && path === '/render/status') {
       const runId = String(q.get('runId') || '')
@@ -1018,6 +1344,943 @@ export function apply(ctx) {
     }
     if (req.method === 'GET' && path === '/render/runs') {
       return sendJson(res, 200, { ok: true, runs: renders.listRuns() })
+    }
+
+    /* ══════════ 生成服务（本地 fal.ai 代理 / OpenAI 兼容） ══════════ */
+    if (req.method === 'GET' && path === '/generate/models') {
+      localNoProxy()
+      const base = generationBase()
+      try {
+        const r = await fetch(base + '/models', { signal: AbortSignal.timeout(5000) })
+        if (!r.ok) throw new Error('HTTP ' + r.status)
+        const j = await r.json()
+        return sendJson(res, 200, { ok: true, baseUrl: base, models: Array.isArray(j.data) ? j.data : [] })
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, baseUrl: base, models: [], error: String(e?.message ?? e) })
+      }
+    }
+    if (req.method === 'POST' && path === '/generate/test') {
+      const body = await readBody(req)
+      if (body.confirm !== true) return sendJson(res, 200, { ok: false, error: '测试会真实计费，需要 confirm:true' })
+      const g = loadCfg().generation || {}
+      if (g.enabled === false) return sendJson(res, 200, { ok: false, error: '生成服务未启用' })
+      const base = generationBase()
+      const model = String(body.model || g.t2i || 'fal-flux-schnell')
+      const prompt = String(body.prompt || 'a simple red apple on a wooden table, studio product photo').slice(0, 500)
+      localNoProxy()
+      try {
+        const r = await fetch(base + '/images/generations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model, prompt, size: '512x512', n: 1 }),
+          signal: AbortSignal.timeout(180_000),
+        })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) return sendJson(res, 200, { ok: false, error: j?.error?.message || ('HTTP ' + r.status) })
+        return sendJson(res, 200, { ok: true, model, url: j?.data?.[0]?.url || '', billable: j?.fal?.billable_units || '' })
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
+      }
+    }
+
+    /* ── 生成任务：持久化队列 + 独立 worker ── */
+    if (req.method === 'GET' && path === '/generate/jobs') {
+      const limit = clampNum(q.get('limit'), 1, 100, 30)
+      const kind = String(q.get('kind') || '').trim()
+      let rows = genStore.listJobs(limit)
+      if (kind === 'image' || kind === 'video') rows = rows.filter((j) => j.kind === kind)
+      return sendJson(res, 200, {
+        ok: true,
+        jobs: rows,
+        active: rows.filter((j) => ['queued', 'running'].includes(j.status)).length,
+      })
+    }
+    if (req.method === 'POST' && path === '/generate/jobs') {
+      const body = await readBody(req)
+      const g = loadCfg().generation || {}
+      if (g.enabled === false) return sendJson(res, 200, { ok: false, error: '生成服务未启用' })
+      const mode = String(body.mode || 't2i').trim()
+      if (!['t2i', 'i2i', 't2v', 'i2v'].includes(mode)) return sendJson(res, 200, { ok: false, error: 'mode 只能是 t2i/i2i/t2v/i2v' })
+      const kind = mode === 't2v' || mode === 'i2v' ? 'video' : 'image'
+      const prompt = String(body.prompt || '').trim()
+      if (!prompt) return sendJson(res, 200, { ok: false, error: '先写一句你想要什么' })
+      const refImages = (Array.isArray(body.refImages) ? body.refImages : []).map((s) => String(s || '').trim()).filter(Boolean)
+      if ((mode === 'i2i' || mode === 'i2v') && !refImages.length) {
+        return sendJson(res, 200, { ok: false, error: '图生图/图生视频需要一张参考图' })
+      }
+      const model = String(body.model || g[mode] || '').trim()
+      if (!model) return sendJson(res, 200, { ok: false, error: '设置里没有为 ' + mode + ' 配模型' })
+      const job = genStore.createJob({
+        kind,
+        mode,
+        model,
+        baseUrl: generationBase(),
+        prompt,
+        refImages,
+        params: body.params && typeof body.params === 'object' ? body.params : {},
+        parentId: body.parentId,
+        title: body.title,
+        priority: body.priority,
+        dryRun: body.dryRun === true,
+      })
+      pumpGen()
+      return sendJson(res, 200, { ok: true, job })
+    }
+    const genMatch = /^\/generate\/jobs\/([a-f0-9]{16})(?:\/(cancel|retry))?$/.exec(path)
+    if (genMatch) {
+      const id = genMatch[1]
+      const action = genMatch[2] || ''
+      if (action === 'cancel' && req.method === 'POST') {
+        const job = await cancelGenJob(id)
+        return sendJson(res, 200, job ? { ok: true, job } : { ok: false, error: '没有这个任务' })
+      }
+      if (action === 'retry' && req.method === 'POST') {
+        const job = genStore.retryJob(id)
+        if (!job) return sendJson(res, 200, { ok: false, error: '任务不存在，或还在排队/生成中' })
+        pumpGen()
+        return sendJson(res, 200, { ok: true, job })
+      }
+      if (req.method === 'GET') {
+        const job = genStore.readJob(id)
+        return sendJson(res, 200, job ? { ok: true, job } : { ok: false, error: '没有这个任务' })
+      }
+    }
+
+
+    /* ══════════ 素材库 · 音色 / 片段 ══════════ */
+    // 素材根目录：BILI_ASSETS 环境变量 > 素材库兄弟目录 assets-src
+    const ASSETS_DIR = assetsRoot
+    const ASSETS_MEDIA_TYPES = {
+      '.wav': 'audio/wav', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.png': 'image/png',
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
+      '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff', '.woff2': 'font/woff2',
+      '.m4a': 'audio/mp4', '.flac': 'audio/flac', '.ogg': 'audio/ogg',
+      '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+    }
+    const UPLOAD_KINDS = {
+      font: { dir: 'fonts', exts: ['.ttf', '.otf', '.woff', '.woff2'], max: 30 * 1024 * 1024 },
+      video: { dir: 'clips', exts: ['.mp4', '.mov', '.webm', '.mkv'], max: 1024 * 1024 * 1024 },
+      audio: { dir: 'bgm', exts: ['.mp3', '.wav', '.m4a', '.flac', '.ogg'], max: 200 * 1024 * 1024 },
+      image: { dir: 'images', exts: ['.png', '.jpg', '.jpeg', '.webp', '.gif'], max: 30 * 1024 * 1024 },
+    }
+    function readJsonArray(file) {
+      try { const a = JSON.parse(readFileSync(file, 'utf8')); return Array.isArray(a) ? a : [] } catch { return [] }
+    }
+    function appendJsonArray(file, entry) {
+      const a = readJsonArray(file)
+      a.push(entry)
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify(a, null, 2))
+    }
+    function probeSeconds(file) {
+      try {
+        const r = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { encoding: 'utf8', timeout: 15000, windowsHide: true })
+        const n = Number(String(r.stdout || '').trim())
+        return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0
+      } catch { return 0 }
+    }
+    function uploadName(raw) {
+      let s = String(raw || '')
+      try { s = decodeURIComponent(s) } catch { /* 原样 */ }
+      if (!s || /[\/]|\.\./.test(s)) return ''
+      return safeName(s)
+    }
+    function uniqueName(dir, name) {
+      const ext = extname(name)
+      const base = name.slice(0, name.length - ext.length)
+      let out = name
+      let i = 1
+      while (existsSync(join(dir, out))) { out = `${base}-${i}${ext}`; i++; if (i > 999) break }
+      return out
+    }
+    function assetsAbs(rel) {
+      const parts = String(rel || '').split(/[\/]/)
+      if (!parts.length || !['voices', 'clips', 'memes', 'bgm', 'stickers', 'fonts', 'images', 'generated', 'characters'].includes(parts[0])) return null
+      if (parts.some((p) => !p || p === '..' || p === '.')) return null
+      const abs = resolve(ASSETS_DIR(), ...parts)
+      if (abs !== ASSETS_DIR() && !abs.startsWith(ASSETS_DIR() + sep)) return null
+      return abs
+    }
+
+    /** 角色参考图：assets-src/characters/ 下的图片；有 character.json 的目录聚合成一组 */
+    function characterItems() {
+      const root = join(ASSETS_DIR(), 'characters')
+      if (!existsSync(root)) return []
+      const out = []
+      const walk = (abs, rel, depth) => {
+        if (depth > 3) return
+        let ents = []
+        try { ents = readdirSync(abs, { withFileTypes: true }) } catch { return }
+        const cj = ents.find((e) => e.isFile() && e.name === 'character.json')
+        if (cj && rel) {
+          try {
+            const meta = JSON.parse(readFileSync(join(abs, 'character.json'), 'utf8'))
+            const refs = []
+            const add = (v) => {
+              if (typeof v === 'string') refs.push('characters/' + rel + '/' + v.replace(/^\/+/, ''))
+              else if (v && typeof v === 'object') Object.values(v).forEach(add)
+            }
+            add(meta.refs)
+            out.push({
+              id: String(meta.id || rel.split(/[\\/]/).pop()),
+              name: String(meta.name || meta.id || rel),
+              file: refs[0] || '',
+              refs,
+              meta,
+            })
+            return
+          } catch { /* 坏 json 继续按图片列 */ }
+        }
+        for (const ent of ents) {
+          if (ent.isDirectory()) { walk(join(abs, ent.name), rel ? rel + '/' + ent.name : ent.name, depth + 1); continue }
+          if (!/\.(png|jpe?g|webp|gif)$/i.test(ent.name)) continue
+          const relFile = 'characters/' + (rel ? rel + '/' : '') + ent.name
+          out.push({
+            id: relFile.replace(/^characters\//, '').replace(/\.[^.]+$/, ''),
+            name: ent.name.replace(/\.[^.]+$/, ''),
+            file: relFile,
+            refs: [relFile],
+          })
+        }
+      }
+      walk(root, '', 0)
+      return out
+    }
+
+    if (req.method === 'GET' && path === '/assets/characters') {
+      return sendJson(res, 200, { ok: true, items: characterItems() })
+    }
+
+    /** 音色试听：克隆音返回已有样本；Edge 音色现场生成短 mp3（异步，不阻塞宿主） */
+    if (req.method === 'POST' && path === '/tts/preview') {
+      const body = await readBody(req)
+      const voice = String(body.voice || '').trim()
+      const text = String(body.text || '大家好，这是当前音色的试听。').trim().slice(0, 120)
+      if (!voice) return sendJson(res, 200, { ok: false, error: '音色为空' })
+      const dir = join(ASSETS_DIR(), 'voices')
+      mkdirSync(dir, { recursive: true })
+      const clone = join(dir, '_clone-' + voice + '.wav')
+      const ref = join(dir, voice + '.wav')
+      if (!VOICES.has(voice)) {
+        if (existsSync(clone)) return sendJson(res, 200, { ok: true, path: 'voices/' + '_clone-' + voice + '.wav', kind: 'clone', note: '克隆音样本' })
+        if (existsSync(ref)) return sendJson(res, 200, { ok: true, path: 'voices/' + voice + '.wav', kind: 'reference', note: '参考音样本' })
+        return sendJson(res, 200, { ok: false, error: '没有这个克隆音的样本' })
+      }
+      const safe = voice.replace(/[^a-zA-Z0-9-]/g, '')
+      const out = join(dir, '_preview-' + safe + '.mp3')
+      const args = ['--voice', voice, '--text', text, '--write-media', out]
+      const runEdge = (bin) => new Promise((resolvePromise) => {
+        let child
+        try {
+          child = spawn(bin, args, { windowsHide: true, stdio: 'ignore' })
+        } catch (e) { return resolvePromise({ ok: false, error: String(e?.message ?? e) }) }
+        const timer = setTimeout(() => { try { killTree(child) } catch { /* ignore */ } resolvePromise({ ok: false, error: '试听生成超时' }) }, 30_000)
+        child.once('error', (e) => { clearTimeout(timer); resolvePromise({ ok: false, error: String(e?.message ?? e) }) })
+        child.once('exit', (code) => { clearTimeout(timer); resolvePromise(code === 0 && existsSync(out) ? { ok: true } : { ok: false, error: 'edge-tts 退出码 ' + code }) })
+      })
+      let r = await runEdge(process.env.EDGE_TTS_BIN || 'edge-tts')
+      if (!r.ok && /ENOENT|not found/i.test(String(r.error || ''))) {
+        const fallback = join(process.env.USERPROFILE || homedir(), '.local', 'bin', process.platform === 'win32' ? 'edge-tts.exe' : 'edge-tts')
+        r = await runEdge(fallback)
+      }
+      if (!r.ok) return sendJson(res, 200, { ok: false, error: r.error })
+      return sendJson(res, 200, { ok: true, path: 'voices/_preview-' + safe + '.mp3', kind: 'edge', note: '临时试听' })
+    }
+
+    /* ══════════ 创作蓝图：确认/编辑/预览 ══════════ */
+    if (req.method === 'GET' && path === '/create/blueprint') {
+      const id = String(q.get('id') || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      const blueprint = deriveBlueprint({ plan, project, cfg: loadCfg(), characters: characterItems() })
+      if (!plan.blueprint && !project.legacy) {
+        plan.blueprint = blueprint
+        writeJson(plans.planFile(id, project.currentVersion), plan)
+      }
+      return sendJson(res, 200, { ok: true, project, plan, blueprint })
+    }
+    if (req.method === 'POST' && path === '/create/blueprint') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      if (project.legacy) return sendJson(res, 200, { ok: false, error: '旧方案不支持蓝图编辑' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      const bp = body.blueprint
+      if (!bp || !Array.isArray(bp.sections)) return sendJson(res, 200, { ok: false, error: 'blueprint.sections 不合法' })
+      const next = applyBlueprint(plan, bp)
+      next.blueprint.updatedAt = new Date().toISOString()
+      next.blueprint.approvedAt = ''
+      writeJson(plans.planFile(id, project.currentVersion), next)
+      const brief = bp.sections.find((s) => s.id === 'brief')
+      if (brief?.content?.title) project.title = String(brief.content.title).slice(0, 80)
+      const voice = bp.sections.find((s) => s.id === 'voice')
+      if (voice?.enabled && voice.content?.voiceId) project.renderVoice = String(voice.content.voiceId).slice(0, 80)
+      plans.saveProject(project)
+      return sendJson(res, 200, { ok: true, project, plan: next, blueprint: next.blueprint })
+    }
+    if (req.method === 'POST' && path === '/create/blueprint/approve') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      const bp = body.blueprint || plan.blueprint
+      if (!bp || !Array.isArray(bp.sections)) return sendJson(res, 200, { ok: false, error: '还没有可确认的蓝图' })
+      bp.approvedAt = new Date().toISOString()
+      const next = applyBlueprint(plan, bp)
+      writeJson(plans.planFile(id, project.currentVersion), next)
+      return sendJson(res, 200, { ok: true, project, plan: next, blueprint: next.blueprint })
+    }
+    if (req.method === 'POST' && path === '/create/blueprint/revise') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const sectionId = String(body.sectionId || '')
+      const instruction = String(body.instruction || '').trim().slice(0, 300)
+      if (!instruction) return sendJson(res, 200, { ok: false, error: '先写一句要改什么' })
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      const bp = deriveBlueprint({ plan, project, cfg: loadCfg(), characters: characterItems() })
+      const section = bp.sections.find((s) => s.id === sectionId)
+      if (!section) return sendJson(res, 200, { ok: false, error: '没有这个部分' })
+      const tmpDir = join(STORE, 'tmp')
+      mkdirSync(tmpDir, { recursive: true })
+      const tag = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const inFile = join(tmpDir, `.bp-in-${tag}.json`)
+      const outFile = join(tmpDir, `.bp-out-${tag}.json`)
+      writeJson(inFile, { title: plan.title || project.title, section, instruction })
+      const r = await runEngine('blueprint.mjs', ['--revise', '--in', inFile, '--out', outFile], 180_000)
+      let data = null
+      try { data = JSON.parse(readFileSync(outFile, 'utf8')) } catch { data = null }
+      try { unlinkSync(inFile) } catch { /* ignore */ }
+      try { unlinkSync(outFile) } catch { /* ignore */ }
+      if (!r.ok || !data?.ok) return sendJson(res, 200, { ok: false, error: data?.error || 'AI 改这节失败（看日志）', log: (r.text || '').slice(-1500) })
+      return sendJson(res, 200, { ok: true, content: data.content, model: data.model || '' })
+    }
+
+    /* ══════════ 制作阶段：关键帧 → 视频 → 组合 ══════════ */
+    function productionView(project, plan) {
+      const production = prod.ensureProduction(project)
+      const rows = prod.shotRows(plan)
+      const takes = prod.productionTakes(project.id)
+      for (const phase of ['keyframes', 'videos']) {
+        const conf = phase === 'keyframes' ? production.keyframes : production.videos
+        for (const [shotId, list] of Object.entries(takes[phase])) {
+          for (const t of list) t.selected = String(t.id) === String(conf?.[shotId]?.selectedAssetId || '')
+        }
+      }
+      const allJobs = genStore.listJobs(400).filter((j) => j.projectId === project.id && j.phase)
+      const jobs = {
+        keyframe: allJobs.filter((j) => j.phase === 'keyframe'),
+        video: allJobs.filter((j) => j.phase === 'video'),
+      }
+      const assembly = { status: 'idle', ...(production.assembly || {}) }
+      let character = null
+      try { character = prod.pickCharacter(plan, characterItems(), production) } catch { character = null }
+      let voice = { enabled: true, voice: '' }
+      try { voice = prod.voiceOf(plan, project, loadCfg()) } catch { voice = { enabled: true, voice: '' } }
+      if (assembly.runId) {
+        const st = renders.readStatus(assembly.runId)
+        if (st) {
+          assembly.stage = st.stage
+          assembly.error = st.error || assembly.error || ''
+          assembly.seconds = st.seconds || 0
+          assembly.title = st.title || assembly.title || ''
+          assembly.videoFile = st.files?.video || ''
+          assembly.coverFile = st.files?.cover || ''
+          if (st.stage === 'rendered') assembly.status = 'done'
+          else if (st.stage === 'failed') assembly.status = 'failed'
+          else if (st.stage === 'assembling') assembly.status = 'running'
+        }
+      }
+      return {
+        production, rows, takes, jobs, assembly, character, voice,
+        approvedAt: plan?.blueprint?.approvedAt || '',
+        canProduce: Boolean(plan?.blueprint?.approvedAt),
+      }
+    }
+
+    if (req.method === 'GET' && path === '/create/production') {
+      const id = String(q.get('id') || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      const had = Boolean(project.production)
+      const view = productionView(project, plan)
+      if (!had) plans.saveProject(project)
+      return sendJson(res, 200, { ok: true, project, plan, ...view })
+    }
+
+    if (req.method === 'POST' && path === '/create/production') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      prod.mergeProduction(project, body.patch || {})
+      plans.saveProject(project)
+      return sendJson(res, 200, { ok: true, project, plan, ...productionView(project, plan) })
+    }
+
+    if (req.method === 'POST' && path === '/create/production/keyframes') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      if (!plan.blueprint?.approvedAt) return sendJson(res, 200, { ok: false, error: '先在「方案蓝图」里点确认，再生成关键帧' })
+      const cfg = loadCfg()
+      if (cfg.generation?.enabled === false) return sendJson(res, 200, { ok: false, error: '生成服务未启用' })
+      const production = prod.ensureProduction(project)
+      const all = prod.shotRows(plan).filter((r) => r.enabled)
+      const wanted = Array.isArray(body.shotIds) ? body.shotIds.map(String) : []
+      const rows = wanted.length ? all.filter((r) => wanted.includes(String(r.shotId))) : all
+      if (!rows.length) return sendJson(res, 200, { ok: false, error: '没有可生成的分镜' })
+      if (rows.length > 12) return sendJson(res, 200, { ok: false, error: '一次最多 12 镜，先分批生成' })
+      const perShot = clampNum(body.perShot, 1, 2, 1)
+      const takes = prod.productionTakes(id)
+      const live = new Set(genStore.listJobs(300)
+        .filter((j) => j.projectId === id && j.phase === 'keyframe' && ['queued', 'running'].includes(j.status))
+        .map((j) => String(j.shotId)))
+      const characters = characterItems()
+      const jobs = []
+      for (const row of rows) {
+        if (live.has(String(row.shotId))) continue
+        const existing = (takes.keyframes[row.shotId] || []).length
+        for (let k = 0; k < perShot; k++) {
+          const spec = prod.keyframeSpec({
+            plan, project, cfg, characters, production, row, takeNo: existing + k + 1,
+          })
+          jobs.push(genStore.createJob(spec))
+        }
+      }
+      if (jobs.length) pumpGen()
+      plans.saveProject(project)
+      log(`关键帧任务 ${id}：${jobs.length} 个`)
+      return sendJson(res, 200, { ok: true, ...productionView(project, plan), jobs })
+    }
+
+    if (req.method === 'POST' && path === '/create/production/videos') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      if (!plan.blueprint?.approvedAt) return sendJson(res, 200, { ok: false, error: '先在「方案蓝图」里点确认，再生成视频' })
+      const cfg = loadCfg()
+      if (cfg.generation?.enabled === false) return sendJson(res, 200, { ok: false, error: '生成服务未启用' })
+      const production = prod.ensureProduction(project)
+      const takes = prod.productionTakes(id)
+      const all = prod.shotRows(plan).filter((r) => r.enabled)
+      const wanted = Array.isArray(body.shotIds) ? body.shotIds.map(String) : []
+      const rows = wanted.length ? all.filter((r) => wanted.includes(String(r.shotId))) : all
+      if (!rows.length) return sendJson(res, 200, { ok: false, error: '没有可生成的分镜' })
+      if (rows.length > 8) return sendJson(res, 200, { ok: false, error: '一次最多 8 镜，先分批生成' })
+      const live = new Set(genStore.listJobs(300)
+        .filter((j) => j.projectId === id && j.phase === 'video' && ['queued', 'running'].includes(j.status))
+        .map((j) => String(j.shotId)))
+      const jobs = []
+      const missing = []
+      for (const row of rows) {
+        if (live.has(String(row.shotId))) continue
+        const sel = production.keyframes[row.shotId]?.selectedAssetId
+        const keyframe = sel ? prod.findTake(takes.keyframes, row.shotId, sel) : null
+        if (!keyframe) { missing.push({ shotId: row.shotId, n: row.n }); continue }
+        const existing = (takes.videos[row.shotId] || []).length
+        const spec = prod.videoSpec({ plan, project, cfg, production, row, keyframe, takeNo: existing + 1 })
+        jobs.push(genStore.createJob(spec))
+      }
+      if (jobs.length) pumpGen()
+      plans.saveProject(project)
+      log(`视频任务 ${id}：${jobs.length} 个；缺关键帧 ${missing.length} 镜`)
+      if (!jobs.length && missing.length) {
+        return sendJson(res, 200, { ok: false, error: `还有 ${missing.length} 镜没选关键帧，先到「关键帧」页选图`, missing })
+      }
+      return sendJson(res, 200, { ok: true, ...productionView(project, plan), jobs, missing })
+    }
+
+    if (req.method === 'POST' && path === '/create/production/assemble') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const plan = plans.getVersion(id, project.currentVersion)
+      if (!plan) return sendJson(res, 200, { ok: false, error: '方案不存在' })
+      if (!plan.blueprint?.approvedAt) return sendJson(res, 200, { ok: false, error: '先在「方案蓝图」里点确认，再组合' })
+      if (!existsSync(ASSEMBLY_WORKER)) return sendJson(res, 200, { ok: false, error: '缺少 production/assemble.mjs' })
+      const production = prod.ensureProduction(project)
+      if (production.assembly?.status === 'running') {
+        const st = renders.readStatus(production.assembly.runId)
+        if (st?.stage === 'assembling') return sendJson(res, 200, { ok: false, error: '已经有一个组合任务在跑' })
+      }
+      const takes = prod.productionTakes(id)
+      const check = prod.assemblyCheck(plan, production, takes)
+      if (!check.ok) {
+        return sendJson(res, 200, {
+          ok: false,
+          error: check.missing.length
+            ? `还有 ${check.missing.length} 镜没选视频：${check.missing.map((x) => `#${x.n}`).join('、')}`
+            : '没有可组合的镜头',
+          missing: check.missing,
+        })
+      }
+      const slug = String(plan.title || project.title || 'ai-video')
+        .toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'ai-video'
+      const base = `${today()}-${slug}-ai`
+      let runId = base
+      for (let n = 2; renders.findRunDir(runId); n++) runId = `${base}-${n}`
+      const runDir = join(renders.runsDir(), runId)
+      mkdirSync(runDir, { recursive: true })
+      const voice = prod.voiceOf(plan, project, loadCfg())
+      const wantVoice = body.voice === undefined ? voice.enabled : Boolean(body.voice)
+      const spec = {
+        projectId: project.id,
+        version: project.currentVersion,
+        runId,
+        title: plan.title || project.title || '',
+        subtitle: plan.subtitle || '',
+        theme: plan.brief || project.brief || '',
+        voice: wantVoice ? voice : { enabled: false, voice: '' },
+        bgm: String(body.bgm || production.assembly?.bgm || ''),
+        rows: check.ready.map(({ row, take }) => ({
+          shotId: row.shotId, n: row.n, kind: row.kind, visual: row.visual, narration: row.narration,
+          duration: row.duration, transition: row.transition,
+          file: take.path || `generated/videos/${take.file}`, assetId: take.id,
+        })),
+      }
+      writeJson(join(runDir, 'assembly.json'), spec)
+      writeJson(join(runDir, 'script.json'), {
+        title: spec.title, subtitle: spec.subtitle, theme: spec.theme,
+        shots: spec.rows.map((r) => ({ kind: r.kind, narration: r.narration, duration: r.duration, assetId: r.assetId })),
+        stats: { shotCount: spec.rows.length, narrationChars: spec.rows.reduce((n, r) => n + String(r.narration).replace(/\s/g, '').length, 0) },
+      })
+      renders.setStage(runId, 'assembling', {
+        title: spec.title, subtitle: spec.subtitle, theme: spec.theme,
+        shots: spec.rows.length, seconds: check.seconds, files: {}, needReview: false,
+        projectId: project.id, projectVersion: project.currentVersion,
+        createdAt: new Date().toISOString(),
+      })
+      production.assembly = {
+        status: 'running', runId, stage: 'assembling', voice: voice.enabled,
+        startedAt: new Date().toISOString(), error: '', at: new Date().toISOString(),
+      }
+      plans.saveProject(project)
+      let child
+      try {
+        child = spawn(process.execPath, [ASSEMBLY_WORKER, '--project', id, '--run', runId], {
+          cwd: HERE, env: genEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      } catch (e) {
+        production.assembly = { status: 'failed', runId, error: String(e?.message ?? e), at: new Date().toISOString() }
+        plans.saveProject(project)
+        renders.setStage(runId, 'failed', { error: production.assembly.error })
+        return sendJson(res, 200, { ok: false, error: production.assembly.error })
+      }
+      assemblyRunning.set(runId, child)
+      let tail = ''
+      const take = (buf) => { tail = (tail + String(buf)).slice(-5000) }
+      child.stdout?.on('data', take)
+      child.stderr?.on('data', take)
+      child.once('exit', (code) => {
+        assemblyRunning.delete(runId)
+        const st = renders.readStatus(runId)
+        const fresh = plans.getProject(id)
+        if (st?.stage !== 'failed' && code !== 0) {
+          renders.setStage(runId, 'failed', { error: (tail.trim() || `assemble 退出码 ${code}`).slice(-2000) })
+        }
+        if (fresh) {
+          const nowSt = renders.readStatus(runId)
+          fresh.production = prod.ensureProduction(fresh)
+          fresh.production.assembly = {
+            ...fresh.production.assembly,
+            status: nowSt?.stage === 'rendered' ? 'done' : 'failed',
+            stage: nowSt?.stage || 'failed',
+            error: nowSt?.stage === 'rendered' ? '' : (nowSt?.error || tail.trim().slice(-1200) || '组合失败'),
+            at: new Date().toISOString(),
+          }
+          plans.saveProject(fresh)
+        }
+        log(`AI 组合结束 ${runId}：${renders.readStatus(runId)?.stage || '未知'}`)
+      })
+      log(`AI 组合开始 ${runId}：${spec.rows.length} 镜`)
+      return sendJson(res, 200, { ok: true, runId, assembly: production.assembly, ...productionView(project, plan) })
+    }
+
+    if (req.method === 'POST' && path === '/create/production/assemble/cancel') {
+      const body = await readBody(req)
+      const id = String(body.id || '')
+      const project = plans.getProject(id)
+      if (!project) return sendJson(res, 200, { ok: false, error: '项目不存在' })
+      const runId = String(body.runId || project.production?.assembly?.runId || '')
+      const child = assemblyRunning.get(runId)
+      if (child) killTree(child)
+      assemblyRunning.delete(runId)
+      if (runId) renders.setStage(runId, 'failed', { error: '已手动取消组合' })
+      const fresh = plans.getProject(id)
+      if (fresh) {
+        fresh.production = prod.ensureProduction(fresh)
+        fresh.production.assembly = { ...fresh.production.assembly, status: 'cancelled', stage: 'cancelled', error: '已手动取消', at: new Date().toISOString() }
+        plans.saveProject(fresh)
+      }
+      return sendJson(res, 200, { ok: true, runId })
+    }
+
+
+    if (req.method === 'GET' && path === '/assets/fonts') {
+      const dir = join(ASSETS_DIR(), 'fonts')
+      if (!existsSync(dir)) return sendJson(res, 200, { ok: true, fonts: [], missing: true })
+      const idx = readJsonArray(join(dir, 'index.json'))
+      const byFile = new Map(idx.map((x) => [x.file, x]))
+      const fonts = readdirSync(dir)
+        .filter((f) => /\.(ttf|otf|woff2?)$/i.test(f))
+        .map((f) => {
+          const st = statSync(join(dir, f))
+          const meta = byFile.get(f) || {}
+          const stem = f.replace(/\.[^.]+$/, '')
+          return { file: f, name: meta.name || stem, family: meta.family || meta.name || stem, bytes: st.size }
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+      return sendJson(res, 200, { ok: true, fonts })
+    }
+    if (req.method === 'GET' && path === '/assets/generated') {
+      const kind = String(q.get('kind') || '').trim()
+      const sub = kind === 'video' ? 'videos' : kind === 'image' ? 'images' : ''
+      if (!sub) return sendJson(res, 200, { ok: false, error: 'kind 只能是 video / image' })
+      const dir = join(ASSETS_DIR(), 'generated', sub)
+      const missing = !existsSync(dir)
+      const idx = readJsonArray(join(dir, 'index.json'))
+      const byFile = new Map(idx.map((x) => [x.file, x]))
+      const files = missing ? [] : readdirSync(dir).filter((f) => /\.(mp4|mov|webm|png|jpg|jpeg|webp)$/i.test(f))
+      const items = files.map((f) => {
+        const st = statSync(join(dir, f))
+        const m = byFile.get(f) || {}
+        return {
+          id: m.id || f,
+          file: f,
+          kind,
+          title: m.title || f.replace(/\.[^.]+$/, ''),
+          prompt: m.prompt || '',
+          model: m.model || '',
+          provider: m.provider || '',
+          seed: m.seed ?? null,
+          params: m.params || null,
+          parentId: m.parentId || '',
+          operation: m.operation || '',
+          status: m.status || 'draft',
+          bytes: st.size,
+          createdAt: m.createdAt || st.mtime.toISOString(),
+        }
+      }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      return sendJson(res, 200, { ok: true, kind, missing, items })
+    }
+    if (req.method === 'GET' && path === '/assets/voices') {
+      const dir = join(ASSETS_DIR(), 'voices')
+      if (!existsSync(dir)) return sendJson(res, 200, { ok: true, dir, missing: true, voices: [] })
+      const voices = readdirSync(dir)
+        .filter((f) => f.toLowerCase().endsWith('.wav') && !f.startsWith('_'))
+        .map((f) => {
+          const st = statSync(join(dir, f))
+          let promptText = ''
+          try { promptText = readFileSync(join(dir, f.replace(/\.wav$/i, '.txt')), 'utf8').trim() } catch { /* 没有参考文本 */ }
+          return {
+            file: f, name: f.replace(/\.wav$/i, ''), promptText,
+            hasClone: existsSync(join(dir, '_clone-' + f)),
+            bytes: st.size, mtime: st.mtimeMs,
+          }
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+      return sendJson(res, 200, { ok: true, dir, voices })
+    }
+    if (req.method === 'GET' && path === '/assets/clips') {
+      let clips = []
+      const clipsDir = join(ASSETS_DIR(), 'clips')
+      const missing = !existsSync(clipsDir)
+      try { clips = JSON.parse(readFileSync(join(clipsDir, 'index.json'), 'utf8')) } catch { /* 还没采过片段 */ }
+      if (!Array.isArray(clips)) clips = []
+      return sendJson(res, 200, { ok: true, dir: clipsDir, missing, clips })
+    }
+    if (req.method === 'GET' && path === '/assets/stickers') {
+      const dir = join(ASSETS_DIR(), 'stickers', 'openmoji', 'png-618x618-color')
+      if (!existsSync(dir)) return sendJson(res, 200, { ok: true, dir, missing: true, total: 0, files: [] })
+      const files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.png')).sort()
+      // emoji 定位查询：前端把 emoji 转成码点文件名后确认存在性
+      const emojiFile = (q.get('emoji') || '').trim().replace(/\.png$/i, '')
+      if (emojiFile) {
+        if (!/^[0-9A-Fa-f-]{1,40}$/.test(emojiFile)) return sendJson(res, 200, { ok: true, exists: false })
+        return sendJson(res, 200, { ok: true, exists: files.includes(`${emojiFile.toUpperCase()}.png`) })
+      }
+      // 分页：page 从 1 起，默认 pageSize=60，最大 200
+      const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(q.get('pageSize') || '60', 10) || 60))
+      const start = (page - 1) * pageSize
+      return sendJson(res, 200, { ok: true, total: files.length, page, pageSize, files: files.slice(start, start + pageSize) })
+    }
+    if (req.method === 'GET' && path === '/assets/memes') {
+      let memes = []
+      const memesDir = join(ASSETS_DIR(), 'memes', 'bili-emotes')
+      const missing = !existsSync(memesDir)
+      try { memes = JSON.parse(readFileSync(join(memesDir, 'index.json'), 'utf8')) } catch { /* 还没建索引 */ }
+      if (!Array.isArray(memes)) memes = []
+      // 可选按包筛选 + 分页：page 从 1 起，默认 pageSize=40，最大 200
+      const pkg = (q.get('pkg') || '').trim()
+      if (pkg) memes = memes.filter((m) => m && m.package === pkg)
+      const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(q.get('pageSize') || '40', 10) || 40))
+      const start = (page - 1) * pageSize
+      return sendJson(res, 200, { ok: true, dir: memesDir, missing, total: memes.length, page, pageSize, memes: memes.slice(start, start + pageSize) })
+    }
+    if (req.method === 'GET' && path === '/assets/bgm') {
+      let bgm = []
+      const bgmDir = join(ASSETS_DIR(), 'bgm')
+      const missing = !existsSync(bgmDir)
+      try { bgm = JSON.parse(readFileSync(join(bgmDir, 'index.json'), 'utf8')) } catch { /* 还没建索引 */ }
+      if (!Array.isArray(bgm)) bgm = []
+      // 可选按 mood 筛选（包含匹配）+ 分页：page 从 1 起，默认 pageSize=20，最大 200
+      const mood = (q.get('mood') || '').trim()
+      if (mood) bgm = bgm.filter((b) => b && String(b.mood || '').includes(mood))
+      const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(q.get('pageSize') || '20', 10) || 20))
+      const start = (page - 1) * pageSize
+      return sendJson(res, 200, { ok: true, dir: bgmDir, missing, total: bgm.length, page, pageSize, bgm: bgm.slice(start, start + pageSize) })
+    }
+    if (req.method === 'POST' && path === '/assets/voice/harvest') {
+      const body = await readBody(req)
+      const name = String(body.name || '').trim()
+      const bv = String(body.bv || '').trim()
+      const from = Number(body.from)
+      const to = Number(body.to)
+      if (!/^[a-zA-Z0-9-]{2,20}$/.test(name)) return sendJson(res, 200, { ok: false, error: '名称只能是 2-20 位英文 / 数字 / 连字符' })
+      if (!BV_RE.test(bv)) return sendJson(res, 200, { ok: false, error: 'BV 号不对' })
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to - from < 3 || to - from > 60) {
+        return sendJson(res, 200, { ok: false, error: '起止秒不对：3 ≤ 长度 ≤ 60' })
+      }
+      if (harvestRunningCount() >= HARVEST_MAX_CONCURRENT) {
+        return sendJson(res, 200, { ok: false, error: `已有 ${HARVEST_MAX_CONCURRENT} 个采集任务在跑` })
+      }
+      // 环境预检：缺 yt-dlp / GPT-SoVITS / bili 直接失败，不让用户白等几分钟
+      const envErr = harvestEnvCheck()
+      const taskId = String(++harvestTaskSeq)
+      if (envErr) {
+        harvestJobs.set(taskId, {
+          state: 'failed', error: envErr, file: '', promptText: '', name, bv,
+          startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+        })
+        scheduleHarvestCleanup(taskId)
+        return sendJson(res, 200, { ok: false, taskId, error: envErr })
+      }
+      // 真正的流水线丢给分离的子进程（voice-harvest.mjs CLI），HTTP 立即返回
+      const child = spawn(process.execPath, [
+        join(ENGINE, 'voice-harvest.mjs'), '--bv', bv, '--from', String(from), '--to', String(to), '--name', name,
+      ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      harvestJobs.set(taskId, {
+        state: 'running', error: '', file: '', promptText: '', name, bv,
+        startedAt: new Date().toISOString(), finishedAt: '', child,
+      })
+      let out = ''
+      child.stdout.on('data', (d) => { out += d })
+      child.stderr.on('data', (d) => { out += d })
+      child.on('error', (e) => {
+        const j = harvestJobs.get(taskId)
+        if (!j || j.state !== 'running') return
+        j.state = 'failed'
+        j.error = '子进程启动失败：' + String(e?.message ?? e)
+        j.finishedAt = new Date().toISOString()
+        scheduleHarvestCleanup(taskId)
+      })
+      child.on('close', (code) => {
+        const j = harvestJobs.get(taskId)
+        if (!j || j.state !== 'running') return
+        j.finishedAt = new Date().toISOString()
+        const line = out.split(/\r?\n/).reverse().find((l) => l.startsWith('__HARVEST_RESULT__'))
+        let r = null
+        if (line) { try { r = JSON.parse(line.slice('__HARVEST_RESULT__'.length)) } catch { r = null } }
+        const produced = join(ASSETS_DIR(), 'voices', `${name}.wav`)
+        if (r?.ok && existsSync(produced)) {
+          j.state = 'done'
+          j.file = r.file || `${name}.wav`
+          j.promptText = r.promptText || ''
+          log(`采音色 ${name}：${bv} ${from}-${to}s，${r.seconds ?? '?'}s 参考音已入库（后台任务 ${taskId}）`)
+        } else {
+          j.state = 'failed'
+          j.error = r?.error || (out.trim().split(/\r?\n/).slice(-5).join('\n').slice(0, 500) || `子进程退出码 ${code}`)
+        }
+        scheduleHarvestCleanup(taskId)
+      })
+      log(`采音色任务 ${taskId} 已受理：${name} ← ${bv} ${from}-${to}s`)
+      return sendJson(res, 200, { ok: true, taskId })
+    }
+    if (req.method === 'GET' && path === '/assets/voice/harvest/status') {
+      const taskId = String(q.get('taskId') || '')
+      const j = harvestJobs.get(taskId)
+      if (!j) return sendJson(res, 200, { ok: false, error: '没有这个任务（可能已完成超过 30 分钟被清理）' })
+      return sendJson(res, 200, {
+        ok: true, taskId, state: j.state, error: j.error || '',
+        file: j.file || '', promptText: j.promptText || '',
+        name: j.name, bv: j.bv, startedAt: j.startedAt, finishedAt: j.finishedAt,
+      })
+    }
+    if (req.method === 'POST' && path === '/assets/voice/import') {
+      const body = await readBody(req)
+      const src = String(body.path || '').trim()
+      const name = String(body.name || '').trim()
+      if (!/^[a-zA-Z0-9-]{2,20}$/.test(name)) return sendJson(res, 200, { ok: false, error: '名称只能是 2-20 位英文 / 数字 / 连字符' })
+      if (!src || !isAbsolute(src)) return sendJson(res, 200, { ok: false, error: '请填 wav 文件的完整路径' })
+      if (!/\.wav$/i.test(src)) return sendJson(res, 200, { ok: false, error: '只支持 .wav 文件' })
+      if (!existsSync(src) || !statSync(src).isFile()) return sendJson(res, 200, { ok: false, error: '文件不存在：' + src })
+      const dir = join(ASSETS_DIR(), 'voices')
+      try { mkdirSync(dir, { recursive: true }) } catch { /* 建不了目录下面会报错 */ }
+      const dest = join(dir, `${name}.wav`)
+      try {
+        cpSync(src, dest)
+        const promptText = String(body.promptText || '').trim()
+        if (promptText) writeFileSync(join(dir, `${name}.txt`), promptText, 'utf8')
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: '拷贝失败：' + String(e?.message ?? e) })
+      }
+      log(`导入音色 ${name}：${src} → ${dest}`)
+      return sendJson(res, 200, { ok: true, file: `${name}.wav`, dir, promptText: Boolean(body.promptText) })
+    }
+    if (req.method === 'GET' && path === '/assets/media') {
+      const file = assetsAbs(q.get('path') || '')
+      if (!file || !existsSync(file) || !statSync(file).isFile()) { res.writeHead(404); return res.end('not found') }
+      const st = statSync(file)
+      const type = ASSETS_MEDIA_TYPES[file.slice(file.lastIndexOf('.')).toLowerCase()] || 'application/octet-stream'
+      const range = req.headers.range
+      if (range) {
+        const m = /bytes=(\d*)-(\d*)/.exec(range)
+        if (m) {
+          const start = m[1] ? Number(m[1]) : 0
+          const end = m[2] ? Number(m[2]) : st.size - 1
+          if (start >= st.size || end < start) {
+            res.writeHead(416, { 'content-range': `bytes */${st.size}` })
+            return res.end()
+          }
+          res.writeHead(206, {
+            'content-type': type, 'accept-ranges': 'bytes',
+            'content-range': `bytes ${start}-${end}/${st.size}`,
+            'content-length': end - start + 1,
+          })
+          return createReadStream(file, { start, end }).pipe(res)
+        }
+      }
+      res.writeHead(200, { 'content-type': type, 'content-length': st.size, 'accept-ranges': 'bytes', 'cache-control': 'no-store' })
+      return createReadStream(file).pipe(res)
+    }
+    if (req.method === 'POST' && path === '/assets/upload') {
+      const kind = String(q.get('kind') || '')
+      const cfg = UPLOAD_KINDS[kind]
+      if (!cfg) return sendJson(res, 200, { ok: false, error: 'kind 只能是 font / video / audio / image' })
+      const original = uploadName(req.headers['x-filename'])
+      if (!original) return sendJson(res, 200, { ok: false, error: '文件名不合法' })
+      const ext = extname(original).toLowerCase()
+      if (!cfg.exts.includes(ext)) return sendJson(res, 200, { ok: false, error: `只支持 ${cfg.exts.join(' / ')}` })
+      const dir = join(ASSETS_DIR(), cfg.dir)
+      try { mkdirSync(dir, { recursive: true }) } catch { return sendJson(res, 200, { ok: false, error: '素材目录不可写' }) }
+      const fileName = uniqueName(dir, original)
+      const dest = join(dir, fileName)
+      return await new Promise((resolveDone) => {
+        const ws = createWriteStream(dest)
+        let bytes = 0
+        let done = false
+        const fail = (msg) => {
+          if (done) return
+          done = true
+          try { ws.destroy() } catch { /* ignore */ }
+          try { unlinkSync(dest) } catch { /* ignore */ }
+          sendJson(res, 200, { ok: false, error: msg })
+          resolveDone()
+        }
+        req.on('data', (c) => {
+          bytes += c.length
+          if (bytes > cfg.max) { req.destroy(); fail('文件太大（上限 ' + Math.round(cfg.max / 1024 / 1024) + ' MB）') }
+        })
+        req.on('aborted', () => fail('上传中断'))
+        ws.on('error', (e) => fail('写入失败：' + String(e?.message ?? e)))
+        ws.on('finish', () => {
+          if (done) return
+          done = true
+          try {
+            if (kind === 'font') {
+              const stem = fileName.replace(/\.[^.]+$/, '')
+              const family = String(stem).replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 60) || 'LocalFont'
+              appendJsonArray(join(dir, 'index.json'), { file: fileName, name: stem, family, bytes, license: '本地文件', addedAt: new Date().toISOString() })
+            } else if (kind === 'video') {
+              const seconds = probeSeconds(dest)
+              appendJsonArray(join(dir, 'index.json'), {
+                file: fileName, bv: '', url: '', title: fileName.replace(/\.[^.]+$/, ''), up: '本地',
+                at: 0, dur: Math.round(seconds), seconds, license: '本地文件', source: 'local', fetchedAt: new Date().toISOString(),
+              })
+            } else if (kind === 'audio') {
+              const seconds = probeSeconds(dest)
+              appendJsonArray(join(dir, 'index.json'), {
+                file: fileName, title: fileName.replace(/\.[^.]+$/, ''), artist: '本地', license: '本地文件',
+                duration_seconds: seconds, source: 'local', mood: '本地',
+              })
+            }
+            log(`导入本地${kind}：${fileName}（${(bytes / 1024 / 1024).toFixed(1)} MB）`)
+            sendJson(res, 200, { ok: true, file: fileName, bytes, kind })
+            resolveDone()
+          } catch (e) { fail('入库失败：' + String(e?.message ?? e)) }
+        })
+        req.pipe(ws)
+      })
+    }
+    if (req.method === 'POST' && path === '/assets/delete') {
+      const body = await readBody(req)
+      const kind = String(body.kind || '')
+      const file = safeName(body.file)
+      if (!file || file.startsWith('_')) {
+        return sendJson(res, 200, { ok: false, error: '文件名不合法' })
+      }
+      if (kind === 'font') {
+        const dir = join(ASSETS_DIR(), 'fonts')
+        try { if (existsSync(join(dir, file))) unlinkSync(join(dir, file)) } catch { /* ignore */ }
+        const idxFile = join(dir, 'index.json')
+        const next = readJsonArray(idxFile).filter((x) => x.file !== file)
+        try { mkdirSync(dir, { recursive: true }); writeFileSync(idxFile, JSON.stringify(next, null, 2)) } catch { /* ignore */ }
+        log(`删除字体 ${file}`)
+        return sendJson(res, 200, { ok: true })
+      }
+      if (kind === 'audio') {
+        const dir = join(ASSETS_DIR(), 'bgm')
+        try { if (existsSync(join(dir, file))) unlinkSync(join(dir, file)) } catch { /* ignore */ }
+        const idxFile = join(dir, 'index.json')
+        const next = readJsonArray(idxFile).filter((x) => x.file !== file)
+        try { mkdirSync(dir, { recursive: true }); writeFileSync(idxFile, JSON.stringify(next, null, 2)) } catch { /* ignore */ }
+        log(`删除本地音频 ${file}`)
+        return sendJson(res, 200, { ok: true })
+      }
+      if (kind === 'voice') {
+        const dir = join(ASSETS_DIR(), 'voices')
+        const stem = file.replace(/\.wav$/i, '')
+        for (const f of [file, stem + '.txt', '_clone-' + file]) {
+          try { if (existsSync(join(dir, f))) unlinkSync(join(dir, f)) } catch { /* 删不掉就算了 */ }
+        }
+        log(`删除音色 ${file}（含参考文本与克隆音）`)
+        return sendJson(res, 200, { ok: true })
+      }
+      if (kind === 'clip') {
+        const idxFile = join(ASSETS_DIR(), 'clips', 'index.json')
+        let clips = []
+        try { clips = JSON.parse(readFileSync(idxFile, 'utf8')) } catch { /* 索引不存在 */ }
+        if (!Array.isArray(clips)) clips = []
+        const next = clips.filter((c) => c.file !== file)
+        try { mkdirSync(join(ASSETS_DIR(), 'clips'), { recursive: true }); writeFileSync(idxFile, JSON.stringify(next, null, 2)) } catch { /* 写不进就算了 */ }
+        try { if (existsSync(join(ASSETS_DIR(), 'clips', file))) unlinkSync(join(ASSETS_DIR(), 'clips', file)) } catch { /* 删不掉就算了 */ }
+        log(`删除片段 ${file}`)
+        return sendJson(res, 200, { ok: true })
+      }
+      return sendJson(res, 200, { ok: false, error: 'kind 只能是 voice / clip / font / audio' })
     }
 
     /* ══════════ 审核 / 发布 ══════════ */
@@ -1057,7 +2320,8 @@ export function apply(ctx) {
     }
     if (req.method === 'POST' && path === '/review/delete') {
       const body = await readBody(req)
-      const runId = String(body.runId || '')
+      const runId = safeName(body.runId)
+      if (!runId) return sendJson(res, 200, { ok: false, error: '成片不存在' })
       const st = renders.readStatus(runId)
       if (!st) return sendJson(res, 200, { ok: false, error: '成片不存在' })
       const live = jobs.get(runId)
@@ -1106,7 +2370,7 @@ export function apply(ctx) {
       if (!st) return sendJson(res, 200, { ok: false, error: '成片不存在' })
       const bvid = String(st.bvid || st.review?.bvid || '')
       if (!bvid) return sendJson(res, 200, { ok: false, error: '这条还没有 BV 号（没真投稿过）' })
-      const r = await runBili(['upload', 'stats', bvid], { timeoutMs: 60000 })
+      const r = await runBiliAsync(['upload', 'stats', bvid], { timeoutMs: 60000 })
       return sendJson(res, 200, { ok: r.ok, bvid, data: r.data || null, error: r.error || null })
     }
     if (req.method === 'POST' && path === '/review/upload') {
@@ -1130,11 +2394,14 @@ export function apply(ctx) {
       args.push('upload', 'video', video, '--title', String(body.title || st.title || '未命名').slice(0, 80))
       for (const t of tags) args.push('--tag', t)
       const desc = String(body.desc || st.subtitle || '').slice(0, 1500)
-      if (desc) args.push('--desc', desc)
+      // 合规：AI 声明由 bili CLI 默认勾选；简介末尾再追加中性文字声明，双保险
+      const declaration = '本视频包含 AI 生成内容'
+      const descFull = desc ? `${desc}\n\n${declaration}` : declaration
+      args.push('--desc', descFull)
       const cover = renders.mediaPath(runId, 'cover')
       if (cover && existsSync(cover)) args.push('--cover', cover)
       if (body.zone || cfg.defaultZone) args.push('--zone', String(Number(body.zone || cfg.defaultZone)))
-      const r = await runBili(args, { timeoutMs: 15 * 60_000 })
+      const r = await runBiliAsync(args, { timeoutMs: 15 * 60_000 })
       if (r.ok && !dryRun) {
         const bvid = r.data?.bvid || r.data?.data?.bvid || ''
         renders.markPublished(runId, { bvid, title: String(body.title || st.title || '') })
@@ -1182,7 +2449,7 @@ export function apply(ctx) {
     /* ══════════ 互动：预览 / dry-run / 受控发送 ══════════ */
     if (req.method === 'GET' && path === '/interact/state') {
       const cfg = loadCfg()
-      return sendJson(res, 200, { ok: true, config: cfg, counts: interact.dayCounts(), commented: interact.commentedMap() })
+      return sendJson(res, 200, { ok: true, config: publicCfg(cfg), counts: interact.dayCounts(), commented: interact.commentedMap() })
     }
     if (req.method === 'POST' && path === '/interact/preview') {
       const body = await readBody(req)
@@ -1278,7 +2545,7 @@ export function apply(ctx) {
         args.push('dm', 'send', uid, text)
       }
 
-      const r = await runBili(args, { timeoutMs: 60000 })
+      const r = await runBiliAsync(args, { timeoutMs: 60000 })
       if (r.ok && !dryRun) {
         if (kind === 'comment') await interact.markComment(body.bv, { text })
         if (kind === 'reply') await interact.markReply(body.rpid, { text })
@@ -1301,7 +2568,7 @@ export function apply(ctx) {
       const sched = loadSched()
       const prog = rangeProgress(cfg.scheduleRanges)
       return sendJson(res, 200, {
-        ok: true, config: cfg,
+        ok: true, config: publicCfg(cfg),
         schedule: {
           ...sched, running: roundRunning, todayCount: collectedToday(),
           inWindow: prog.inWindow, target: targetToday(cfg), totalMinutes: prog.total,
@@ -1318,15 +2585,50 @@ export function apply(ctx) {
         'personaPrompt', 'reportLevel', 'favFolderId',
         'memoryEnabled', 'userCharLimit', 'memoryCharLimit', 'reflectEnabled', 'memoryEventsMax',
         'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',
-        'autoComment', 'autoReply', 'ownerUid', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay', 'commentImageEvery',
+        'autoComment', 'autoReply', 'ownerUid', 'ownerUids', 'ownerCall', 'mentionName', 'mentions', 'replyPerDay', 'commentImageEvery',
         'ownerTasksEnabled', 'ownerTaskPollMinutes', 'ownerTaskPerDay', 'ownerTaskAllowDm', 'ownerTaskMaxAgeHours',
+        'publicMentionsEnabled', 'publicMentionPerDay', 'mentionVision',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
-        'voice', 'modelChain', 'concurrency',
+        'voice', 'modelChain', 'visionChain', 'concurrency', 'generation',
         'publishEnabled', 'defaultTags', 'defaultZone',
       ]
       for (const k of copyKeys) if (k in body) patch[k] = body[k]
+      // 前端回传占位符 = 用户没改密钥，保留旧值不覆盖
+      if (patch.llmKey === '__SAVED__') delete patch.llmKey
       const cfg = saveCfg(patch)
-      return sendJson(res, 200, { ok: true, config: cfg })
+      return sendJson(res, 200, { ok: true, config: publicCfg(cfg) })
+    }
+
+    /* ══════════ 文本模型端点：拉列表 / 熔断状态 / 手动重置 ══════════ */
+    if (req.method === 'GET' && path === '/llm/models') {
+      const base = llmBase()
+      const key = llmKeyValue()
+      if (!key) return sendJson(res, 200, { ok: false, base, error: '还没有模型密钥（设置里的 llmKey / 环境变量 OC_API_KEY）' })
+      try {
+        const r = await fetch(base + '/models', {
+          headers: { authorization: `Bearer ${key}` },
+          signal: AbortSignal.timeout(15_000),
+        })
+        const text = await r.text()
+        if (!r.ok) return sendJson(res, 200, { ok: false, base, error: `HTTP ${r.status} ${text.slice(0, 200)}` })
+        let j = {}
+        try { j = JSON.parse(text) } catch { return sendJson(res, 200, { ok: false, base, error: '端点返回的不是 JSON' }) }
+        const models = (j.data || []).map((m) => ({
+          id: String(m.id || ''),
+          modalities: m.metadata?.input_modalities || m.input_modalities || [],
+          reasoning: Boolean(m.reasoning),
+        })).filter((m) => m.id)
+        return sendJson(res, 200, { ok: true, base, models })
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, base, error: String(e?.message ?? e).slice(0, 300) })
+      }
+    }
+    if (req.method === 'GET' && path === '/llm/state') {
+      return sendJson(res, 200, { ok: true, base: llmBase(), state: readLlmBreaker() })
+    }
+    if (req.method === 'POST' && path === '/llm/reset-breaker') {
+      resetLlmBreaker()
+      return sendJson(res, 200, { ok: true, reset: true, state: readLlmBreaker() })
     }
     if (req.method === 'POST' && path === '/run-round') {
       const cfg = loadCfg()
@@ -1343,7 +2645,7 @@ export function apply(ctx) {
     }
     if (req.method === 'POST' && path === '/open-folder') {
       const body = await readBody(req)
-      const target = body.what === 'runs' ? renders.RUNS : STORE
+      const target = body.what === 'runs' ? renders.runsDir() : STORE
       try {
         const child = spawn('explorer.exe', [target], { detached: true, stdio: 'ignore', windowsHide: false })
         child.unref()
@@ -1409,21 +2711,33 @@ export function apply(ctx) {
     try { ctx.logger?.warn?.('[bili-workbench] 路由没挂上：' + String(e?.message ?? e)) } catch { /* ignore */ }
   }
 
+  /* ── 生成任务：上次遗留的 running 标中断，queued 继续跑 ── */
+  try {
+    const n = genStore.recoverInterrupted()
+    if (n) log(`生成队列：${n} 个中断任务已标记，可重试`)
+    pumpGen()
+  } catch (e) {
+    log('生成队列恢复失败：' + String(e?.message ?? e))
+  }
+
   /* ── 自己的视频：启动时补一次缓存，之后每 6 小时看一次是否过期 ── */
   canon.ensureFresh()
     .then((st) => { if (st?.epCount) log(`自己的视频：${st.title} · ${st.epCount} 集`) })
     .catch(() => { /* 离线时用旧缓存 */ })
   try {
-    setInterval(() => { canon.ensureFresh().catch(() => { /* 忽略 */ }) }, 6 * 3600_000)
+    const canonTimer = setInterval(() => { canon.ensureFresh().catch(() => { /* 忽略 */ }) }, 6 * 3600_000)
+    canonTimer.unref?.()
+    ctx.effect(() => () => clearInterval(canonTimer), 'bili-workbench: 自己的视频定时器')
   } catch { /* ignore */ }
 
   /* ── 主人 @ 任务：每分钟看一眼是否到点（频率可配置） ── */
-  let ownerTaskRunning = false
-  let ownerTaskLast = 0
   const ownerTick = async () => {
     try {
       const cfg = loadCfg()
-      if (!cfg.ownerTasksEnabled || !cfg.ownerUid) return
+      const hasOwner = Boolean(cfg.ownerUid || (cfg.ownerUids || []).length)
+      const ownerOn = cfg.ownerTasksEnabled !== false && hasOwner
+      const publicOn = cfg.publicMentionsEnabled !== false && Number(cfg.publicMentionPerDay) > 0
+      if (!ownerOn && !publicOn) return
       const every = Math.max(1, Number(cfg.ownerTaskPollMinutes) || 3) * 60_000
       if (Date.now() - ownerTaskLast < every) return
       if (ownerTaskRunning) return
@@ -1441,8 +2755,13 @@ export function apply(ctx) {
       ownerTaskRunning = false
     }
   }
-  setTimeout(ownerTick, 60_000)
-  try { setInterval(ownerTick, 60_000) } catch { /* ignore */ }
+  try {
+    const ownerKick = setTimeout(ownerTick, 60_000)
+    ownerKick.unref?.()
+    const ownerTimer = setInterval(ownerTick, 60_000)
+    ownerTimer.unref?.()
+    ctx.effect(() => () => { clearTimeout(ownerKick); clearInterval(ownerTimer) }, 'bili-workbench: 主人任务定时器')
+  } catch (e) { log('主人任务定时器没起来：' + (e?.message ?? e)) }
 
   /* ── 采集定时器：按时段 + 每日上限平均分配，每分钟看一次 ── */
   try {
@@ -1543,6 +2862,27 @@ export function apply(ctx) {
       }
     }
   } catch (e) { log('项目状态恢复失败：' + (e?.message ?? e)) }
+
+  /* ── 插件卸载/宿主退出：杀掉还在跑的渲染/采音色子进程，避免孤儿 ── */
+  try {
+    const cleanupChildren = () => {
+      for (const j of jobs.values()) if (j.stage === 'running' && j.child) killTree(j.child)
+      for (const j of harvestJobs.values()) if (j.state === 'running' && j.child) killTree(j.child)
+      for (const g of genRunning.values()) killTree(g.child)
+      genRunning.clear()
+    }
+    ctx.effect(() => {
+      process.once('SIGTERM', cleanupChildren)
+      process.once('SIGINT', cleanupChildren)
+      process.once('beforeExit', cleanupChildren)
+      return () => {
+        process.off('SIGTERM', cleanupChildren)
+        process.off('SIGINT', cleanupChildren)
+        process.off('beforeExit', cleanupChildren)
+        cleanupChildren()
+      }
+    }, 'bili-workbench: 子进程清理')
+  } catch { /* ignore */ }
 
   log(`工作台已挂载（库=${STORE}）`)
   try { ctx.logger?.info?.('[bili-workbench] 已挂载（库=' + STORE + '）') } catch { /* ignore */ }

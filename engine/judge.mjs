@@ -16,7 +16,7 @@ import { get, put, list, paths } from './store.mjs'
 import { loadLLM } from './llmpath.mjs'
 import { addEvent } from './memory.mjs'
 
-const { chatJSON, assertKey } = await loadLLM()
+const { chatJSON, assertKey, isStopError } = await loadLLM()
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -129,6 +129,11 @@ async function main() {
       log(`     热梗：${(done.memes || []).join(' / ') || '无'}`)
     } catch (e) {
       log(`  ✗ ${rec.bvid} ${String(e?.message ?? e).split('\n')[0]}`)
+      // 熔断/预算命中说明上游整体不可用，继续判定只会重复失败并放大请求量
+      if (isStopError(e)) {
+        log('  模型链已熔断，本轮停止（不再逐条重试）')
+        break
+      }
     }
   }
 }

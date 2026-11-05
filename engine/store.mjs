@@ -17,10 +17,9 @@ import { join, resolve, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 
 // 素材库位置：默认 ~/.dsh-bili-workbench/store；可以在「我的」页面改。
-// 优先级：location.json（用户选过）> BILI_STORE > 旧机器默认目录 > 新默认目录。
+// 优先级：location.json（用户选过）> BILI_STORE > 新默认目录。
 const HOME_DIR = join(homedir(), '.dsh-bili-workbench')
 const LOCATION_FILE = join(HOME_DIR, 'location.json')
-const LEGACY_STORE = 'D:\\AI_projects\\bibilili\\bili-store'
 const DEFAULT_STORE = join(HOME_DIR, 'store')
 const expandHome = (p) => String(p || '').replace(/^~(?=$|[\\/])/, homedir())
 
@@ -36,7 +35,6 @@ export function resolveStoreRoot() {
   if (saved && isAbsolute(saved)) return saved
   const env = expandHome(process.env.BILI_STORE || '')
   if (env) return resolve(env)
-  if (existsSync(LEGACY_STORE)) return LEGACY_STORE
   return DEFAULT_STORE
 }
 
@@ -44,6 +42,16 @@ export const defaultStorePath = () => DEFAULT_STORE
 export const locationFile = () => LOCATION_FILE
 
 export let STORE = resolveStoreRoot()
+
+/**
+ * 素材根目录（assets-src）的唯一权威解析：读写两侧都必须走这里。
+ * 优先级：BILI_ASSETS 环境变量 > STORE 同级 assets-src。
+ * 此前 voice-harvest/clip 用模块相对路径、plan/render 只认 STORE 同级，
+ * 设了 BILI_ASSETS 或切库后写侧与读侧会指向不同目录（采了音色却显示失败）。
+ */
+export function assetsRoot() {
+  return resolve(process.env.BILI_ASSETS || join(STORE, '..', 'assets-src'))
+}
 
 const dirsFor = (root) => ({
   videos: join(root, 'videos'),
@@ -60,6 +68,7 @@ export function setStoreRoot(p) {
   mkdirSync(abs, { recursive: true })
   DIRS = dirsFor(abs)
   STORE = abs
+  _statsCache = null
   mkdirSync(HOME_DIR, { recursive: true })
   writeFileSync(LOCATION_FILE, JSON.stringify({ storePath: abs }, null, 2), 'utf8')
   ensureStore()
@@ -150,8 +159,29 @@ export function list({ limit = 100 } = {}) {
   return out.slice(0, limit)
 }
 
-/** 库的规模：条数 + 磁盘占用（MB） */
+/** 库的规模：条数 + 磁盘占用（MB）；30 秒内存缓存（切库即失效），列表页不用每次全量扫盘 */
+let _statsCache = null
+
+/**
+ * 今日已采条数：30 秒 + 按日双键缓存。
+ * /config 被多个页面高频轮询，此前每次都触发 list() 全量读盘（2000 个 JSON 同步 parse），
+ * 是宿主越用越卡的主因之一。采集以分钟计，30 秒陈旧对上限判定无实际影响。
+ */
+let _todayCache = null
+export function todayCount() {
+  const day = new Date().toLocaleDateString('sv-SE')
+  if (_todayCache && _todayCache.path === STORE && _todayCache.day === day
+    && Date.now() - _todayCache.at < 30_000) return _todayCache.value
+  const n = list({ limit: 2000 }).filter((r) => {
+    // 与 index.js localDay 同口径：按本地时区取日（ISO 的 UTC 日期会和本地日差一天）
+    try { return new Date(r.fetchedAt).toLocaleDateString('sv-SE') === day } catch { return String(r.fetchedAt || '').slice(0, 10) === day }
+  }).length
+  _todayCache = { at: Date.now(), path: STORE, day, value: n }
+  return n
+}
+
 export function stats() {
+  if (_statsCache && _statsCache.path === STORE && Date.now() - _statsCache.at < 30_000) return _statsCache.value
   let bytes = 0
   let files = 0
   const walk = (d) => {
@@ -165,5 +195,7 @@ export function stats() {
   }
   walk(STORE)
   const n = existsSync(DIRS.videos) ? readdirSync(DIRS.videos).filter((f) => f.endsWith('.json')).length : 0
-  return { videos: n, files, mb: Number((bytes / 1024 / 1024).toFixed(1)), path: STORE }
+  const value = { videos: n, files, mb: Number((bytes / 1024 / 1024).toFixed(1)), path: STORE }
+  _statsCache = { at: Date.now(), path: STORE, value }
+  return value
 }

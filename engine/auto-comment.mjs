@@ -9,16 +9,20 @@
  *   · 默认真的发；--dry-run 只打印命令，用于测试
  *   · 生成失败/风控失败都停，不自动重试
  */
-import { list } from './store.mjs'
+import { list, assetsRoot } from './store.mjs'
 import { runBili } from './bili.mjs'
 import * as interact from './interact.mjs'
 import { composeText } from './compose-lib.mjs'
 import { ownerInfo, mentionTargets, callNames } from './owner.mjs'
 import * as canon from './canon.mjs'
 import { addEvent, renderRecallBlock } from './memory.mjs'
+import { loadLLM } from './llmpath.mjs'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// 熔断错误：模型链整体不可用时，本轮不该继续逐条硬打，直接结束。
+const { isStopError } = await loadLLM()
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name)
@@ -71,7 +75,7 @@ async function main() {
   function memePool() {
     try {
       // index.json 在 bili-emotes/ 下，但 file 字段带 "bili-emotes/" 前缀，实际相对 assets-src/memes/
-      const base = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets-src', 'memes')
+      const base = join(assetsRoot(), 'memes')
       const idx = JSON.parse(readFileSync(join(base, 'bili-emotes', 'index.json'), 'utf8'))
       return idx.filter((m) => m?.file && existsSync(join(base, m.file))).map((m) => join(base, m.file))
     } catch { return [] }
@@ -112,6 +116,11 @@ async function main() {
     } catch (e) {
       log(`  ✗ ${rec.bvid} 生成失败：${String(e?.message ?? e).split('\n')[0]}`)
       fail++
+      // 熔断/预算命中说明上游整体不可用，继续跑只会重复失败并放大请求量
+      if (isStopError(e)) {
+        log('  模型链已熔断，本轮停止（不再逐条重试）')
+        break
+      }
       continue
     }
     if (!text) { log(`  ✗ ${rec.bvid} 生成为空`); fail++; continue }

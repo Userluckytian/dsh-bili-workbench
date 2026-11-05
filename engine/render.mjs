@@ -8,9 +8,9 @@
  *   · 进度从子进程日志里推（阶段权重），前端轮询 /render/status
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, cpSync, rmSync } from 'node:fs'
-import { join, dirname, basename } from 'node:path'
+import { join, dirname, basename, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { paths as storePaths, STORE } from './store.mjs'
+import { paths as storePaths, STORE, assetsRoot } from './store.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BILI_OP_BUNDLED = join(HERE, '..', 'bili-op')
@@ -18,14 +18,26 @@ const BILI_OP_SIBLING = join(HERE, '..', '..', 'bili-op')
 export const BILI_OP = process.env.BILI_OP_DIR
   || (existsSync(join(BILI_OP_BUNDLED, 'build.mjs')) ? BILI_OP_BUNDLED : BILI_OP_SIBLING)
 // 成片必须跟着素材库走：插件升级会重装 node_modules，放在 bili-op/runs 会被清掉
-export const RUNS = process.env.BILI_OP_RUNS || join(STORE, 'renders')
+// 惰性求值：STORE 可能在运行时被 setStoreRoot 改变，目录必须每次现算
+export const runsDir = () => process.env.BILI_OP_RUNS || join(STORE, 'renders')
 const LEGACY_RUNS = join(BILI_OP, 'runs')
 const PUBLIC_PLANS = join(BILI_OP, 'render', 'public', 'plans')
 
+/** 前缀白名单校验：runId 禁止路径分隔符/..，resolve 后必须落在 base 内，防路径穿越 */
+export function safeRunDir(runId, base) {
+  if (!runId || typeof runId !== 'string') return null
+  if (/[\\/]|\.\./.test(runId)) return null
+  const root = resolve(base) + sep
+  const dir = resolve(join(base, runId))
+  if (!dir.startsWith(root)) return null
+  return dir
+}
+
 /** 新目录优先；老版本留在 bili-op/runs 的成片继续可读 */
 export function findRunDir(runId) {
-  for (const d of [join(RUNS, runId), join(LEGACY_RUNS, runId)]) {
-    if (existsSync(d)) return d
+  for (const base of [runsDir(), LEGACY_RUNS]) {
+    const d = safeRunDir(runId, base)
+    if (d && existsSync(d)) return d
   }
   return ''
 }
@@ -33,11 +45,11 @@ export function findRunDir(runId) {
 /** 插件内置布局的旧成片迁到素材库，避免下次升级再被清掉 */
 export function migrateLegacyRuns() {
   if (BILI_OP !== BILI_OP_BUNDLED || !existsSync(LEGACY_RUNS)) return 0
-  mkdirSync(RUNS, { recursive: true })
+  mkdirSync(runsDir(), { recursive: true })
   let n = 0
   for (const name of readdirSync(LEGACY_RUNS)) {
     const src = join(LEGACY_RUNS, name)
-    const dst = join(RUNS, name)
+    const dst = join(runsDir(), name)
     if (existsSync(dst)) continue
     try { cpSync(src, dst, { recursive: true }); n++ } catch { /* 单个失败不影响其它 */ }
   }
@@ -77,7 +89,7 @@ export function prepareRun(proj, plan, version) {
   const base = `${today()}-${slug(plan.title)}-v${v}`
   let runId = base
   for (let n = 2; findRunDir(runId); n++) runId = `${base}-${n}`
-  const runDir = join(RUNS, runId)
+  const runDir = join(runsDir(), runId)
   mkdirSync(runDir, { recursive: true })
 
   // 真实帧：有 source 的镜头，把库里最近的一帧拷到 render/public
@@ -99,7 +111,7 @@ export function prepareRun(proj, plan, version) {
       }
     }
     if (s.footage?.clip) {
-      const src = join(STORE, '..', 'assets-src', 'clips', s.footage.clip)
+      const src = join(assetsRoot(), 'clips', s.footage.clip)
       if (existsSync(src)) {
         const clipsPub = join(PUBLIC_PLANS, '..', 'clips')
         mkdirSync(clipsPub, { recursive: true })
@@ -177,7 +189,7 @@ export function readStatus(runId) {
 export function listRuns() {
   const out = []
   const seen = new Set()
-  for (const root of [RUNS, LEGACY_RUNS]) {
+  for (const root of [runsDir(), LEGACY_RUNS]) {
     if (!existsSync(root)) continue
     for (const name of readdirSync(root)) {
       if (seen.has(name)) continue
@@ -207,7 +219,7 @@ export function listRuns() {
 }
 
 const statusFile = (runId) => {
-  const dir = findRunDir(runId) || join(RUNS, runId)
+  const dir = findRunDir(runId) || join(runsDir(), runId)
   mkdirSync(dir, { recursive: true })
   return join(dir, 'status.json')
 }
@@ -255,9 +267,13 @@ export function mediaPath(runId, kind) {
 export function deleteRun(runId) {
   const dir = findRunDir(runId)
   if (!dir) return false
-  const norm = dir.replace(/\//g, '\\').toLowerCase()
-  if (!norm.includes('\\renders\\') && !norm.includes('\\runs\\')) return false
+  // resolve 后的前缀白名单：必须落在 renders/ 或旧 runs/ 目录内才允许删
+  const norm = resolve(dir).toLowerCase()
+  const okNew = norm.startsWith((resolve(runsDir()) + sep).toLowerCase())
+  const okLegacy = norm.startsWith((resolve(LEGACY_RUNS) + sep).toLowerCase())
+  if (!okNew && !okLegacy) return false
   rmSync(dir, { recursive: true, force: true })
-  try { rmSync(join(PUBLIC_PLANS, runId), { recursive: true, force: true }) } catch { /* 可选清理 */ }
+  const safePlan = safeRunDir(runId, PUBLIC_PLANS)
+  if (safePlan) { try { rmSync(safePlan, { recursive: true, force: true }) } catch { /* 可选清理 */ } }
   return true
 }

@@ -7,7 +7,7 @@
  *
  * 防污染规则（写进模型提示 + 代码双重保障）：
  *   · 只记跨次有效的偏好和事实，一次性指令不记
- *   · 咕嘎人设/角色设定永不入记忆（企鹅、饼干、Doro……）
+ *   · 账号人设/角色设定永不入记忆（外形、口头禅、性格……）
  *   · 普通用户的话不入记忆（事件流里只有主人指令和自己的行为）
  *   · 最多 3 条，每条 ≤60 字；没有值得记的就输出空数组
  */
@@ -27,7 +27,7 @@ const SYSTEM = `你是账号主人的记忆管家。你会看到这位账号主�
 必须遵守：
 - 只记会反复生效的东西：主人的口味、纠正（"标题太长""换个风格"）、重复出现的习惯、任务失败的教训
 - 一次性的指令不记（"这次用横屏"不记；"以后都用横屏"才记）
-- 账号的角色设定/人设（比如企鹅、咕嘎、Doro 这类形象设定）永远不进记忆
+- 账号的角色设定/人设（外形、口头禅、性格这类形象设定）永远不进记忆
 - 密钥、UID、配置数字、路径不进记忆
 - 已有记忆里已有的内容不要重复记
 - 每条 ≤60 字，说人话；最多 3 条；没有值得记的就给空数组
@@ -102,8 +102,9 @@ async function runReflectInner(state, source) {
     const target = m?.target === 'user' ? 'user' : 'memory'
     const content = String(m?.content || '').trim().slice(0, 60)
     if (!content) continue
-    // 角色设定兜底：提到咕嘎人设词的一律不写（模型偶尔不听话）
-    if (/咕嘎|企鹅|小饼干|饼干|Doro|doro/.test(content)) { results.push({ content, skipped: '疑似角色设定' }); continue }
+    // 角色设定兜底：人设词一律不写（模型偶尔不听话）
+    // 公开版用通用检测：自称类词 + 人设描述词，不绑定项目专属角色名
+    if (/(人设|角色设定|设定里|我的外形|口头禅)|^(我是|我叫)/.test(content)) { results.push({ content, skipped: '疑似角色设定' }); continue }
     const r = await memory.apply({ target, action: 'add', content }, { unattended: true, source })
     results.push({ content, target, ok: r.ok, deduped: !!r.deduped, error: r.error || '' })
   }

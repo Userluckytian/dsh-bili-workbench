@@ -35,9 +35,20 @@ export function ownerInfo(cfg = loadCfg()) {
   }
 }
 
+/** 所有主人 UID：ownerUid 永远算，ownerUids 可再加最多 5 个（多账号） */
+export function ownerUids(cfg = loadCfg()) {
+  const out = []
+  const add = (v) => {
+    const s = String(v || '').trim()
+    if (s && !out.includes(s)) out.push(s)
+  }
+  add(cfg.ownerUid)
+  for (const x of (Array.isArray(cfg.ownerUids) ? cfg.ownerUids : [])) add(x?.uid || x)
+  return out
+}
+
 export function isOwnerMid(mid, cfg = loadCfg()) {
-  const { uid } = ownerInfo(cfg)
-  return Boolean(uid && String(mid || '') === uid)
+  return ownerUids(cfg).includes(String(mid || '').trim())
 }
 
 /** 自动评论要 @ 的人：主人 + mentions 列表（可多人），按 target 去重 */

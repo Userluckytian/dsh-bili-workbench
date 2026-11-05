@@ -14,7 +14,8 @@ import { join } from 'node:path'
 import { runBili } from './bili.mjs'
 import { STORE } from './store.mjs'
 
-const DIR = join(STORE, 'canon')
+// 惰性求值：STORE 可能在运行时被 setStoreRoot 改变，目录必须每次现算
+const dir = () => join(STORE, 'canon')
 const readJson = (f, d = null) => { try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return d } }
 const cfg = () => readJson(join(STORE, 'config.json'), {}) || {}
 
@@ -31,15 +32,15 @@ export function parseSeason(input) {
   return { seasonId, mid }
 }
 
-const cacheFile = (seasonId) => join(DIR, `season-${seasonId}.json`)
+const cacheFile = (seasonId) => join(dir(), `season-${seasonId}.json`)
 
 /** 没配 URL 时用最近刷新过的那个合集，保证刚拉过就能用 */
 function latestCache() {
   try {
-    const files = readdirSync(DIR).filter((f) => /^season-\d+\.json$/.test(f))
+    const files = readdirSync(dir()).filter((f) => /^season-\d+\.json$/.test(f))
     let best = null
     for (const f of files) {
-      const c = readJson(join(DIR, f), null)
+      const c = readJson(join(dir(), f), null)
       if (!c?.fetchedAt) continue
       if (!best || Date.parse(c.fetchedAt) > Date.parse(best.fetchedAt)) best = c
     }
@@ -141,7 +142,7 @@ export function refresh(input, { force = false } = {}) {
   const r = fetchSeason(seasonId, mid || String(old?.mid || ''))
   if (!r.ok) return r
   try {
-    if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true })
+    if (!existsSync(dir())) mkdirSync(dir(), { recursive: true })
     const f = cacheFile(seasonId)
     const tmp = f + '.tmp'
     writeFileSync(tmp, JSON.stringify(r.data, null, 2), 'utf8')

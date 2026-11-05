@@ -13,9 +13,11 @@
  */
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
-import { list, STORE, paths } from './store.mjs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { list, STORE, paths, assetsRoot } from './store.mjs'
 import { loadLLM } from './llmpath.mjs'
 import { renderBlock, renderRecallBlock, addEvent } from './memory.mjs'
+import { CREATIVE_STANDARD } from './creative-standard.mjs'
 
 const { chatJSON, assertKey } = await loadLLM()
 
@@ -27,7 +29,7 @@ const KINDS = new Set(['title', 'item', 'data', 'outro', 'scene', 'broll'])
 /* 已裁剪的视频片段索引（assets-src/clips）；插件布局没有该目录时返回空 */
 function clipIndex() {
   try {
-    const f = join(STORE, '..', 'assets-src', 'clips', 'index.json')
+    const f = join(assetsRoot(), 'clips', 'index.json')
     return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : []
   } catch { return [] }
 }
@@ -43,7 +45,9 @@ const SYSTEM = `你是 B站「资讯盘点」的编导。你手上有一个素�
 ② 写一期 60–90 秒的分镜脚本，每镜一段口语旁白
 ③ 每一镜尽可能绑定一条素材的**具体时间点**（用索引里给的秒数），方便后面画面直接截那一帧
 
-只输出 JSON，不要解释、不要代码块围栏。所有文字用简体中文，旁白要口语、短句。`
+只输出 JSON，不要解释、不要代码块围栏。所有文字用简体中文，旁白要口语、短句。
+
+${CREATIVE_STANDARD}`
 
 /** 人设（偏好里填的 personaPrompt）：只影响措辞，不影响结构 */
 function personaLine() {
@@ -164,6 +168,9 @@ function normalize(json, rows) {
       shot.badge = String(s.badge || '').slice(0, 6)
     } else if (kind === 'scene') {
       shot.headline = String(s.headline || '').slice(0, 22)
+      // 角色名可选：模型没写就留空，News.tsx 回落到「左边 / 右边」
+      shot.nameL = String(s.nameL || '').slice(0, 10)
+      shot.nameR = String(s.nameR || '').slice(0, 10)
       shot.lines = (Array.isArray(s.lines) ? s.lines : []).slice(0, 6)
         .map((l) => ({ who: l?.who === 'R' ? 'R' : 'L', text: String(l?.text || '').slice(0, 30) }))
         .filter((l) => l.text)
@@ -309,4 +316,13 @@ async function main() {
   console.log(`\nPLAN_FILE=${file}`)
 }
 
-main().catch((e) => { console.error('失败：' + (e?.message ?? e)); process.exit(1) })
+// 只有直接 `node plan.mjs …` 时才跑 main；被 import 时只导出函数（测试/工具会 import）
+function isMain() {
+  try {
+    return Boolean(process.argv[1]) && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+  } catch { return false }
+}
+
+if (isMain()) {
+  main().catch((e) => { console.error('失败：' + (e?.message ?? e)); process.exit(1) })
+}

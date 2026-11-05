@@ -11,6 +11,7 @@ import { join, dirname, extname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { runBili } from './bili.mjs'
+import { assetsRoot } from './store.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -42,11 +43,11 @@ const title = info.data.title || ''
 const up = info.data.up?.name || info.data.owner?.name || ''
 
 // ---- 3. 目标目录（先定位，幂等检查要在下载前做） ----
-const assetsRoot = join(here, '..', '..', 'assets-src')
-if (!existsSync(assetsRoot)) {
-  die('仅项目根布局支持：未找到 assets-src 目录')
+const root = assetsRoot()
+if (!existsSync(root)) {
+  die(`未找到素材目录 assets-src：${root}（可用环境变量 BILI_ASSETS 指定）`)
 }
-const clipsDir = join(assetsRoot, 'clips')
+const clipsDir = join(root, 'clips')
 mkdirSync(clipsDir, { recursive: true })
 const finalName = `${bv}-${at}s.mp4`
 const finalPath = join(clipsDir, finalName)
