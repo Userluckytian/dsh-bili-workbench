@@ -144,19 +144,48 @@ export function storeCover(bv, buf) {
   return `covers/${bv}.jpg`
 }
 
-/** 列表（按抓取时间倒序） */
+/**
+ * 列表（按抓取时间倒序）
+ *
+ * 性能：此前每次调用都把 <STORE>/videos 下全部 JSON 同步读盘+parse 一遍
+ * （630 条约 6MB），而 /store/list 会被页面反复请求，直接把宿主事件循环堵住。
+ * 现在按「目录 mtime + 条目数」做签名缓存：目录没变就不重复 parse，
+ * 命中缓存时只切片返回。签名变了（新增/删除素材）自动重扫。
+ */
+let _listCache = null
+
+/** 当前素材目录的签名；目录不存在返回空串 */
+function videosSignature() {
+  if (!existsSync(DIRS.videos)) return ''
+  try {
+    const st = statSync(DIRS.videos)
+    const n = readdirSync(DIRS.videos).length
+    return `${st.mtimeMs}:${n}`
+  } catch { return '' }
+}
+
+/** 供上层做「没变化就返回空」的增量判断 */
+export function listSignature() {
+  return videosSignature()
+}
+
 export function list({ limit = 100 } = {}) {
   if (!existsSync(DIRS.videos)) return []
-  const out = []
-  for (const f of readdirSync(DIRS.videos)) {
-    if (!f.endsWith('.json')) continue
-    try {
-      const rec = JSON.parse(readFileSync(join(DIRS.videos, f), 'utf8'))
-      out.push(rec)
-    } catch { /* 坏文件跳过 */ }
+  const sig = videosSignature()
+  const fresh = _listCache && _listCache.path === STORE && _listCache.sig === sig
+  if (!fresh) {
+    const out = []
+    for (const f of readdirSync(DIRS.videos)) {
+      if (!f.endsWith('.json')) continue
+      try {
+        const rec = JSON.parse(readFileSync(join(DIRS.videos, f), 'utf8'))
+        out.push(rec)
+      } catch { /* 坏文件跳过 */ }
+    }
+    out.sort((a, b) => String(b.fetchedAt || '').localeCompare(String(a.fetchedAt || '')))
+    _listCache = { path: STORE, sig, at: Date.now(), rows: out }
   }
-  out.sort((a, b) => String(b.fetchedAt || '').localeCompare(String(a.fetchedAt || '')))
-  return out.slice(0, limit)
+  return _listCache.rows.slice(0, limit)
 }
 
 /** 库的规模：条数 + 磁盘占用（MB）；30 秒内存缓存（切库即失效），列表页不用每次全量扫盘 */
@@ -181,7 +210,9 @@ export function todayCount() {
 }
 
 export function stats() {
-  if (_statsCache && _statsCache.path === STORE && Date.now() - _statsCache.at < 30_000) return _statsCache.value
+  const sig = videosSignature()
+  if (_statsCache && _statsCache.path === STORE && _statsCache.sig === sig
+    && Date.now() - _statsCache.at < 30_000) return _statsCache.value
   let bytes = 0
   let files = 0
   const walk = (d) => {
@@ -196,6 +227,6 @@ export function stats() {
   walk(STORE)
   const n = existsSync(DIRS.videos) ? readdirSync(DIRS.videos).filter((f) => f.endsWith('.json')).length : 0
   const value = { videos: n, files, mb: Number((bytes / 1024 / 1024).toFixed(1)), path: STORE }
-  _statsCache = { at: Date.now(), path: STORE, value }
+  _statsCache = { at: Date.now(), path: STORE, sig, value }
   return value
 }

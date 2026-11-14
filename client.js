@@ -523,8 +523,10 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
     /* ═══════════════════ ① 素材库 ═══════════════════ */
     function StoreRow({ r, onDetail }) {
       const quotes = r.quotes || []
-      const memes = r.memes || []
-      const comments = r.hotComments || []
+      // 列表接口只回计数（quoteCount），明细在详情里；兼容老字段
+      const quoteCount = r.quoteCount ?? quotes.length
+      const memeCount = r.memeCount ?? (r.memes || []).length
+      const commentCount = r.commentCount ?? (r.hotComments || []).length
       const metaText = [r.up?.name, fmtDur(r.duration), r.stat ? `播放 ${fmtNum(r.stat.view)}` : ''].filter(Boolean).join(' · ')
       const fullMeta = [...[r.up?.name, fmtDur(r.duration), r.stat ? `播放 ${fmtNum(r.stat.view)} · 点赞 ${fmtNum(r.stat.like)}` : '', `采集于 ${dayOf(r.fetchedAt)}`].filter(Boolean)].join(' · ')
       return h('div', { 'data-wb-mat': '', 'data-wb-bv': r.bvid },
@@ -538,11 +540,11 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           r.judge ? h('div', { 'data-wb-why': '', title: r.judge.why || '' }, r.judge.why || '还没有 AI 评级')
             : h('div', { 'data-wb-note': '' }, '还没判定 —— 去「刷 B 站 → 设置」跑一轮'),
           h('div', { 'data-wb-row': '' },
-            quotes.length
-              ? h('button', { 'data-wb-fact': '', onClick: () => onDetail(r.bvid) }, `${quotes.length} 条金句`)
+            quoteCount
+              ? h('button', { 'data-wb-fact': '', onClick: () => onDetail(r.bvid) }, `${quoteCount} 条金句`)
               : h('span', { 'data-wb-fact': '', 'data-quiet': '' }, '暂无片段'),
-            memes.length ? h('span', { 'data-wb-fact': '' }, `${memes.length} 个热梗`) : null,
-            comments.length ? h('span', { 'data-wb-fact': '' }, `${comments.length} 条热评`) : null),
+            memeCount ? h('span', { 'data-wb-fact': '' }, `${memeCount} 个热梗`) : null,
+            commentCount ? h('span', { 'data-wb-fact': '' }, `${commentCount} 条热评`) : null),
           h('div', { 'data-wb-row': '' },
             h(Btn, { sm: true, onClick: () => onDetail(r.bvid) }, '查看详情'),
             r.commented ? h('span', { 'data-wb-chip': '', 'data-ok': '' }, '已评论') : null,
@@ -1204,8 +1206,14 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
     function TabStore() {
       const [sub, setSub] = useState('video')
       const [q, setQ] = useState('')
+      const [qInput, setQInput] = useState('')
       const [view, setView] = useState('list')
       const [videoPage, setVideoPage] = useState(1)
+      // 搜索防抖：输入停顿 300ms 才落到 q，避免每个按键都请求一次
+      useEffect(() => {
+        const t = setTimeout(() => { setQ(qInput.trim()); setVideoPage(1) }, 300)
+        return () => clearTimeout(t)
+      }, [qInput])
       const [importOpen, setImportOpen] = useState(false)
       const [harvestOpen, setHarvestOpen] = useState(false)
       const [memePage, setMemePage] = useState(1)
@@ -1215,7 +1223,23 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       const [stickerPage, setStickerPage] = useState(1)
       const [uploadKind, setUploadKind] = useState('')
       const [genOpen, setGenOpen] = useState(null)
-      const storeList = useApi('/store/list?limit=300')
+      // 服务端分页 + 服务端搜索：只取当前页（20 条），不再一次拉 300 条 / ~1MB
+      const storeList = useApi(sub === 'video'
+        ? `/store/list?page=${videoPage}&pageSize=20${q ? '&q=' + encodeURIComponent(q) : ''}`
+        : '')
+      // 素材分类可见性（设置 → 界面）
+      const uiCfg = useApi('/config')
+      const cfg = uiCfg.data?.config
+      const visibleAssetTabs = useMemo(() => {
+        const list = cfg?.ui?.assetTabs
+        return (!Array.isArray(list) || !list.length)
+          ? ASSET_TABS
+          : ASSET_TABS.filter(([k]) => list.includes(k))
+      }, [cfg])
+      // 当前分类被隐藏时回落到第一个可见分类
+      useEffect(() => {
+        if (visibleAssetTabs.length && !visibleAssetTabs.some(([k]) => k === sub)) setSub(visibleAssetTabs[0][0])
+      }, [visibleAssetTabs, sub])
       const voiceList = useApi(sub === 'voice' ? '/assets/voices' : '')
       const clipList = useApi(sub === 'clip' ? '/assets/clips' : '')
       const fontList = useApi(sub === 'font' ? '/assets/fonts' : '')
@@ -1271,7 +1295,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                         }, '刷新'),
                       ])),
           h('div', { 'data-wb-row': '', 'data-wb-subtabs': '' },
-            ...[['video', '视频'], ['voice', '音色'], ['font', '字体'], ['clip', '片段'], ['meme', '表情包'], ['bgm', 'BGM'], ['sticker', '贴纸'], ['aivideo', 'AI 视频'], ['aiimage', 'AI 图片']].map(([k, l]) =>
+            ...visibleAssetTabs.map(([k, l]) =>
               h('button', { key: k, 'data-wb-btn': '', 'data-sm': '', 'data-primary': sub === k ? '' : undefined, onClick: () => setSub(k) }, l)),
             h('div', { 'data-wb-grow': '' }),
             h(Chip, {}, sub === 'video'
@@ -1288,8 +1312,8 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         sub === 'video' ? h('div', { 'data-wb-row': '' },
           h('input', {
             'data-wb-search': '', style: { flex: '1 1 240px', maxWidth: '420px', width: 'auto' },
-            placeholder: '搜索标题、评级理由或金句', value: q,
-            onChange: (e) => { setQ(e.target.value); setVideoPage(1) },
+            placeholder: '搜索标题、评级理由或金句', value: qInput,
+            onChange: (e) => setQInput(e.target.value),
           }),
           h(Note, {}, '按标题 / 评级理由 / 金句搜索')) : null,
         sub === 'video' ? h(TabStoreVideo, { list: storeList, q, view, videoPage, setVideoPage }) : null,
@@ -1329,17 +1353,12 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         window.addEventListener('keydown', onKey)
         return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey) }
       }, [open])
-      const rows = (list.data?.rows || []).filter((r) => {
-        if (!q.trim()) return true
-        const k = q.trim().toLowerCase()
-        return [r.title, r.up?.name, r.judge?.why, ...(r.quotes || []).map((x) => x.text)]
-          .some((s) => String(s || '').toLowerCase().includes(k))
-      })
-      // 客户端分页：数据已全量在手，每页 20 条
-      const vTotal = rows.length
-      const vPages = Math.max(1, Math.ceil(vTotal / 20))
-      const vPage = Math.min(videoPage, vPages)
-      const pagedRows = rows.slice((vPage - 1) * 20, vPage * 20)
+      const rows = list.data?.rows || []
+      // 服务端已按 page/pageSize 切好，前端不再二次过滤与切片
+      const vTotal = list.data?.total ?? rows.length
+      const vPageSize = list.data?.pageSize || 20
+      const vPage = list.data?.page || videoPage
+      const pagedRows = rows
       const rec = detail.data?.record
       const sub = detail.data?.subtitles
 
@@ -1371,7 +1390,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               h('div', { 'data-wb-row': '' },
                 h(Btn, { sm: true, onClick: () => setOpen(r.bvid) }, '查看详情')))))),
 
-        vTotal > 20 ? h(Pager, { page: vPage, total: vTotal, pageSize: 20, onChange: setVideoPage }) : null,
+        vTotal > vPageSize ? h(Pager, { page: vPage, total: vTotal, pageSize: vPageSize, onChange: setVideoPage }) : null,
         open ? h('div', {
           'data-wb-overlay': '', role: 'dialog', 'aria-modal': 'true', 'aria-label': '素材详情',
           onClick: (e) => { if (e.target === e.currentTarget) setOpen('') },
@@ -1794,7 +1813,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '模型链'), h('b', {}, `${String(draft.modelChainText || '').split(String.fromCharCode(10)).filter(Boolean).length} 个`)),
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '长期记忆'), h('b', {}, draft.memoryEnabled === false ? '关' : '开'))),
           h('nav', { 'data-wb-settings-nav': '' },
-            ...[['set-schedule', '定时采集'], ['set-persona', '人设与偏好'], ['set-interact', '互动'], ['set-models', '模型顺序'], ['set-generation', '生成服务']].map(([id, label], i) =>
+            ...[['set-schedule', '定时采集'], ['set-persona', '人设与偏好'], ['set-interact', '互动'], ['set-models', '模型顺序'], ['set-generation', '生成服务'], ['set-ui', '界面']].map(([id, label], i) =>
               h('button', {
                 key: id, 'data-sel': i === 0 ? '' : undefined,
                 onClick: (ev) => {
@@ -2048,6 +2067,47 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               }, genBusy === 'gen' ? '测试中…' : '测试生成（约 $0.003）'),
               genMsg ? h('span', { 'data-wb-note': '' }, genMsg) : null),
             h(Note, {}, '测试连接只读 /v1/models；测试生成会真实计费，只测最便宜的文生图。')),
+
+          h(Sec, { id: 'set-ui', title: '界面' },
+            h('div', { 'data-wb-col': '' },
+              h('div', { 'data-wb-h': '' }, '左侧模块（勾选要显示的）'),
+              h('div', { 'data-wb-row': '', style: { flexWrap: 'wrap', gap: '6px 18px' } },
+                ...UI_TABS.map(([k, label]) => {
+                  const list = draft.ui?.tabs || UI_TABS.map(([x]) => x)
+                  const isMine = k === 'mine'
+                  const on = list.includes(k)
+                  return h('label', { key: k, 'data-wb-toggle': '', title: isMine ? '设置入口，不可隐藏' : '' },
+                    h('input', {
+                      type: 'checkbox', checked: on, disabled: isMine,
+                      onChange: (e) => {
+                        const cur = new Set(draft.ui?.tabs || UI_TABS.map(([x]) => x))
+                        if (e.target.checked) cur.add(k); else cur.delete(k)
+                        // 至少保留一项；「我的」永远在
+                        const next = UI_TABS.map(([x]) => x).filter((x) => cur.has(x) || x === 'mine')
+                        set('ui', { ...(draft.ui || {}), tabs: next })
+                      },
+                    }),
+                    h('span', {}, label + (isMine ? '（固定）' : '')))
+                })),
+              h(Note, {}, '取消勾选后对应模块从左侧消失，至少保留一项。「我的」是设置入口，不可隐藏。')),
+            h('div', { 'data-wb-col': '' },
+              h('div', { 'data-wb-h': '' }, '素材库分类（勾选要显示的）'),
+              h('div', { 'data-wb-row': '', style: { flexWrap: 'wrap', gap: '6px 18px' } },
+                ...ASSET_TABS.map(([k, label]) => {
+                  const list = draft.ui?.assetTabs || ASSET_TABS.map(([x]) => x)
+                  return h('label', { key: k, 'data-wb-toggle': '' },
+                    h('input', {
+                      type: 'checkbox', checked: list.includes(k),
+                      onChange: (e) => {
+                        const cur = new Set(draft.ui?.assetTabs || ASSET_TABS.map(([x]) => x))
+                        if (e.target.checked) cur.add(k); else cur.delete(k)
+                        const next = ASSET_TABS.map(([x]) => x).filter((x) => cur.has(x))
+                        set('ui', { ...(draft.ui || {}), assetTabs: next.length ? next : ['video'] })
+                      },
+                    }),
+                    h('span', {}, label))
+                })),
+              h(Note, {}, '至少保留一个分类。隐藏的分类仍会正常采集，只是不在界面上显示。'))),
 
           h(Err, {}, cfgRes.err),
           h('div', { 'data-wb-row': '', 'data-wb-save-row': '' },
@@ -3739,6 +3799,25 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
     }
 
     /* ═══════════════════ 外壳 ═══════════════════ */
+    // 模块清单：与后端 normalizeCfg 的 TAB_IDS / ASSET_TAB_IDS 保持一致
+    const UI_TABS = [
+      ['store', '素材库'],
+      ['scroll', '刷 B 站'],
+      ['create', '创作出片'],
+      ['review', '审核发布'],
+      ['mine', '我的'],
+    ]
+    const ASSET_TABS = [
+      ['video', '视频'],
+      ['voice', '音色'],
+      ['font', '字体'],
+      ['clip', '片段'],
+      ['meme', '表情包'],
+      ['bgm', 'BGM'],
+      ['sticker', '贴纸'],
+      ['aivideo', 'AI 视频'],
+      ['aiimage', 'AI 图片'],
+    ]
     const NAV = [
       ['store', 'library', '素材库'],
       ['scroll', 'play', '刷 B 站'],
@@ -3780,6 +3859,17 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       const [tab, setTab] = useState('store')
       const [collapsed, setCollapsed] = useState(false)
       const rootRef = useRef(null)
+      // 菜单可见性：读 /config 的 ui.tabs；「我的」恒显示
+      const shellCfg = useApi('/config')
+      const visibleTabs = useMemo(() => {
+        const raw = shellCfg.data?.config?.ui?.tabs
+        const list = Array.isArray(raw) && raw.length ? raw : UI_TABS.map(([k]) => k)
+        return UI_TABS.filter(([k]) => list.includes(k) || k === 'mine')
+      }, [shellCfg.data])
+      // 当前页被隐藏（或初始值不在可见列表里）时回落到第一个可见页
+      useEffect(() => {
+        if (!visibleTabs.some(([k]) => k === tab)) setTab(visibleTabs[0]?.[0] || 'mine')
+      }, [visibleTabs, tab])
       // 让工作台高度跟着宿主“可用区 - 输入区”走，避免外层再多一条滚动条
       React.useLayoutEffect(() => {
         const root = rootRef.current
@@ -3819,7 +3909,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         h('aside', { 'data-wb-rail': '' },
           h('div', { 'data-wb-brand': '' }, 'B站工作台', h('small', {}, '从素材到发布')),
           h('nav', { style: { display: 'flex', flexDirection: 'column' } },
-            ...NAV.map(([k, ico, label]) => h('button', {
+            ...visibleTabs.map(([k, ico, label]) => h('button', {
               key: k, 'data-wb-nav': '', 'aria-selected': tab === k ? 'true' : 'false',
               'aria-label': label, title: label,
               onClick: () => setTab(k),
@@ -3845,26 +3935,44 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         document.head.appendChild(style)
         ctx.effect(() => () => style.remove(), 'dsh-bili-workbench: 样式')
         const slots = (typeof ctx.get === 'function' ? ctx.get('slots') : undefined) || ctx.slots
-        // 页签注册诊断：任何失败都写到页面左下角 + console.error，
-        // 修复 issue#2「宿主半正常、浏览器半无痕、哪里都不报错」——失败必须可见。
+        // 页签注册诊断：默认只写 console.error，不再往页面上贴浮层。
+        // issue#2 需要的是「失败可见」，而 console 已经满足；早年那条固定在左下角的
+        // 黑底绿字诊断条（#bili-wb-diag）常驻并压住输入区，属于净负担，改为按需开启：
+        //   浏览器控制台执行 localStorage.setItem('bili-wb:diag', '1') 后刷新即可显示，
+        //   排查完 localStorage.removeItem('bili-wb:diag') 关掉。
+        const diagOn = () => {
+          try { return localStorage.getItem('bili-wb:diag') === '1' } catch (_) { return false }
+        }
         const diag = (m, e) => {
           const msg = '[bili-wb] ' + m + (e !== undefined ? ' :: ' + ((e && e.message) || String(e)) : '')
           try { console.error(msg) } catch (_) { /* 旧内核无 console 也别炸 */ }
+          if (!diagOn()) return
           try {
             let el = document.getElementById('bili-wb-diag')
             if (!el) {
               el = document.createElement('div')
               el.id = 'bili-wb-diag'
-              el.setAttribute('style', 'position:fixed;left:0;bottom:0;z-index:99999;' +
+              el.setAttribute('style', 'position:fixed;right:8px;bottom:8px;z-index:99999;' +
+                'max-width:min(420px,80vw);max-height:30vh;overflow:auto;' +
+                'border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.35);' +
                 'background:#111;color:#0f0;font:12px/1.6 monospace;padding:6px 10px;' +
-                'max-width:100vw;white-space:pre-wrap;pointer-events:none;opacity:.85')
+                'white-space:pre-wrap;pointer-events:auto;opacity:.9')
               document.body.appendChild(el)
             }
             el.textContent += msg + '\n'
+            el.scrollTop = el.scrollHeight
           } catch (_) { /* DOM 未就绪时只留 console */ }
         }
+        // 成功路径不占用 error 级别，避免正常挂载也在控制台刷红字。
+        const note = (m) => {
+          try { console.debug('[bili-wb] ' + m) } catch (_) { /* 忽略 */ }
+        }
+        // 覆盖安装/热更新时，旧版本可能已经在页面上留过诊断条：默认状态下清掉它。
+        if (!diagOn()) {
+          try { document.getElementById('bili-wb-diag')?.remove() } catch (_) { /* 忽略 */ }
+        }
         if (!slots) { diag('未获得 slots 服务（inject 落空），页签不会注册'); return }
-        diag('apply：slots=' + !!slots)
+        note('apply：slots=' + !!slots)
         // 注册 B站工作台为会话视图页签。对齐 0.2.1+ 官方形状：
         // chat/trajectory 都是 { name, id, order, label, locale?, children?, inject? }。
         const registerView = () => slots.register({
@@ -3872,10 +3980,10 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         }, () => h(Shell))
         try {
           const ret = slots.inject('conversation.view', () => {
-            try { const r = registerView(); diag('conversation.view 注册成功'); return r }
+            try { const r = registerView(); note('conversation.view 注册成功'); return r }
             catch (e) { diag('conversation.view 注册失败', e); throw e }
           })
-          diag('slots.inject 返回 ' + (ret && ret.then ? 'Promise' : typeof ret))
+          note('slots.inject 返回 ' + (ret && ret.then ? 'Promise' : typeof ret))
         } catch (e) { diag('slots.inject 抛错（槽位缺失或校验拒绝）', e) }
         // 兜底入口：设置 → 插件页里放一个可打开的页签（桌面上 conversation.view
         // 若因版本差异不可用，至少这里给用户一个入口，也不再静默）。
@@ -3883,7 +3991,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           slots.inject('settings.plugins.tab', () => slots.register({
             name: 'settings.plugins.tab', id: 'bili-workbench', order: 40, label: 'B站工作台',
           }, () => h(Shell)))
-          diag('settings.plugins.tab 兜底入口注册成功')
+          note('settings.plugins.tab 兜底入口注册成功')
         } catch (e) { diag('settings.plugins.tab 注册失败（无此槽位就忽略）', e) }
       },
     }

@@ -20,6 +20,7 @@ import { runBiliAsync, fetchCover, biliBin } from './engine/bili.mjs'
 import {
   list as storeList, get as storeGet, stats as storeStats, STORE, paths as storePaths,
   setStoreRoot, defaultStorePath, locationFile, assetsRoot, todayCount as storeTodayCount,
+  listSignature as storeListSignature,
 } from './engine/store.mjs'
 import * as plans from './engine/planstore.mjs'
 import * as renders from './engine/render.mjs'
@@ -146,6 +147,11 @@ const DEFAULTS = {
   publishEnabled: false,
   defaultTags: ['资讯', '盘点'],
   defaultZone: 0,
+  /* 界面：可勾选显示哪些模块（「我的」恒显示） */
+  ui: {
+    tabs: ['store', 'scroll', 'create', 'review', 'mine'],
+    assetTabs: ['video', 'voice', 'font', 'clip', 'meme', 'bgm', 'sticker', 'aivideo', 'aiimage'],
+  },
 }
 
 /* ───────────── 小工具 ───────────── */
@@ -298,6 +304,17 @@ function normalizeCfg(c) {
     .map((s) => String(s).trim()).filter(Boolean).slice(0, 10)
   if (!out.defaultTags.length) out.defaultTags = ['资讯', '盘点']
   out.defaultZone = clampNum(out.defaultZone, 0, 9999, 0)
+  /* 界面：哪些模块 / 素材分类要显示。「我的」是设置入口，永远保留。 */
+  const TAB_IDS = ['store', 'scroll', 'create', 'review', 'mine']
+  const ASSET_TAB_IDS = ['video', 'voice', 'font', 'clip', 'meme', 'bgm', 'sticker', 'aivideo', 'aiimage']
+  const ui = out.ui && typeof out.ui === 'object' ? out.ui : {}
+  const pick = (raw, all) => {
+    const arr = (Array.isArray(raw) ? raw : []).map((s) => String(s)).filter((s) => all.includes(s))
+    return arr.length ? [...new Set(arr)] : [...all]
+  }
+  const tabs = pick(ui.tabs, TAB_IDS)
+  if (!tabs.includes('mine')) tabs.push('mine')
+  out.ui = { tabs, assetTabs: pick(ui.assetTabs, ASSET_TAB_IDS) }
   return out
 }
 
@@ -974,6 +991,12 @@ export function apply(ctx) {
       const limit = Math.max(1, Math.min(Number(q.get('limit')) || 100, 500))
       const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1)
       const pageSize = Math.min(200, Math.max(1, parseInt(q.get('pageSize') || '50', 10) || 50))
+      // 增量签名：前端带上上次的 sig，库没变就直接回「unchanged」，不再算总数、不再传行
+      const sig = storeListSignature()
+      const clientSig = String(q.get('sig') || '')
+      if (clientSig && clientSig === sig) {
+        return sendJson(res, 200, { ok: true, unchanged: true, sig, stats: storeStats() })
+      }
       const rows = storeList({ limit: 2000 })
       let filtered = rows
       if (TIERS.has(tier)) filtered = filtered.filter((r) => (r.judge?.tier || '未判定') === tier)
@@ -990,13 +1013,27 @@ export function apply(ctx) {
       const pageRows = filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
       const legacyLimitRows = (q.get('page') === null && q.get('pageSize') === null)
         ? filtered.slice(0, limit) : pageRows
-      const slim = legacyLimitRows.map(({ subtitle, quotes, ...rest }) => ({
-        ...rest,
-        commented: Boolean(commented[String(rest.bvid || '')]),
-        quotes: (quotes || []).slice(0, 3),
-        subtitle: subtitle ? { lang: subtitle.lang, chars: subtitle.chars, missing: subtitle.missing || '' } : null,
+      const slim = legacyLimitRows.map((r) => ({
+        // 字段白名单：列表卡片用不到 frames / hotComments / hotDanmaku / memes，
+        // 全量透传会让单页响应从几十 KB 涨到几百 KB，客户端 state 也跟着膨胀。
+        bvid: r.bvid,
+        title: r.title,
+        up: r.up ? { mid: r.up.mid, name: r.up.name } : null,
+        duration: r.duration,
+        pubdate: r.pubdate,
+        cover: r.cover,
+        stat: r.stat ? { view: r.stat.view, like: r.stat.like, coin: r.stat.coin, favorite: r.stat.favorite, reply: r.stat.reply } : null,
+        judge: r.judge || null,
+        fetchedAt: r.fetchedAt,
+        reason: r.reason || '',
+        commented: Boolean(commented[String(r.bvid || '')]),
+        quoteCount: (r.quotes || []).length,
+        memeCount: (r.memes || []).length,
+        commentCount: (r.hotComments || []).length,
+        quotes: (r.quotes || []).slice(0, 2),
+        subtitle: r.subtitle ? { lang: r.subtitle.lang, chars: r.subtitle.chars, missing: r.subtitle.missing || '' } : null,
       }))
-      return sendJson(res, 200, { ok: true, rows: slim, total, page, pageSize, stats: storeStats(), ranges: parseRanges(loadCfg().scheduleRanges).length })
+      return sendJson(res, 200, { ok: true, rows: slim, total, page, pageSize, sig, stats: storeStats(), ranges: parseRanges(loadCfg().scheduleRanges).length })
     }
     if (req.method === 'GET' && path === '/store/item') {
       const bv = String(q.get('bv') || '')
@@ -2589,7 +2626,7 @@ export function apply(ctx) {
         'ownerTasksEnabled', 'ownerTaskPollMinutes', 'ownerTaskPerDay', 'ownerTaskAllowDm', 'ownerTaskMaxAgeHours',
         'publicMentionsEnabled', 'publicMentionPerDay', 'mentionVision',
         'dmWatch', 'dmWatchMinutes', 'dmReplyPerDay', 'dmOwnerUid',
-        'voice', 'modelChain', 'visionChain', 'concurrency', 'generation',
+        'voice', 'modelChain', 'visionChain', 'concurrency', 'generation', 'ui',
         'publishEnabled', 'defaultTags', 'defaultZone',
       ]
       for (const k of copyKeys) if (k in body) patch[k] = body[k]
