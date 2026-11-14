@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.1 — 2026-11-14
+
+**修复 issue#2（「B站工作台」页签在部分环境不出现）：失败必须可见 + 兜底入口。**
+
+### 修复
+
+- **注册失败不再静默**（issue#2 的「哪里都不报错」）：会话视图页签注册全程带诊断，任何失败都 `console.error` 并写到页面左下角的诊断条（`#bili-wb-diag`）。拿到报错才能定位桌面版页签缺失的根因。
+- **新增兜底入口**：额外注册 `settings.plugins.tab`（设置 → 插件页里出现「B站工作台」）。桌面端若 `conversation.view` 因版本差异不可用，至少还有一个入口能打开工作台。
+- **注册形状对齐官方**：去掉多余的顶层 `scope`（官方 chat/trajectory 都把 `scope` 放在 `children.<slot>` 里，0.2.1-rc.3 源码核对），`label` 保持字符串（与官方文档示例一致）。
+- **清理幽灵依赖声明**：`dsh.client.inject` 移除 `@deepseek-ai/dsh-client-runtime`——该包名在 0.2.1-rc.3 / 0.2.2-rc.1 的 asar 与 node_modules 中均不存在（字节级 0 命中）。inject 只用于排序激活，找不到的条目会被跳过，无害但不应保留。
+
+### 验证（Simular Box，Ubuntu 24.04 / Node 24.21）
+
+- `dsh 0.2.1-rc.3` web profile + `file:<tgz>` 安装（复刻报告人装法）：页签正常出现，工作台五模块完整渲染。
+- `nodeLinker: hoisted` 布局下同样正常。
+- 带顶层 `scope` 的原始写法与对齐后的写法均注册成功——issue#2 的三条猜测（空 catch 吞错、label 类型、幽灵包名）经实测均非根因；桌面版（Electron asar）是唯一未能复刻的变量，1.3.1 的诊断输出将直接给出答案。
+
 ## 1.3.0 — 2026-11-06
 
 **@ 任务重写：先看视频，再回答；识图拆成独立子智能体。**

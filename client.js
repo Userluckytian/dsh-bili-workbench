@@ -3845,12 +3845,46 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         document.head.appendChild(style)
         ctx.effect(() => () => style.remove(), 'dsh-bili-workbench: 样式')
         const slots = (typeof ctx.get === 'function' ? ctx.get('slots') : undefined) || ctx.slots
-        if (!slots) return
+        // 页签注册诊断：任何失败都写到页面左下角 + console.error，
+        // 修复 issue#2「宿主半正常、浏览器半无痕、哪里都不报错」——失败必须可见。
+        const diag = (m, e) => {
+          const msg = '[bili-wb] ' + m + (e !== undefined ? ' :: ' + ((e && e.message) || String(e)) : '')
+          try { console.error(msg) } catch (_) { /* 旧内核无 console 也别炸 */ }
+          try {
+            let el = document.getElementById('bili-wb-diag')
+            if (!el) {
+              el = document.createElement('div')
+              el.id = 'bili-wb-diag'
+              el.setAttribute('style', 'position:fixed;left:0;bottom:0;z-index:99999;' +
+                'background:#111;color:#0f0;font:12px/1.6 monospace;padding:6px 10px;' +
+                'max-width:100vw;white-space:pre-wrap;pointer-events:none;opacity:.85')
+              document.body.appendChild(el)
+            }
+            el.textContent += msg + '\n'
+          } catch (_) { /* DOM 未就绪时只留 console */ }
+        }
+        if (!slots) { diag('未获得 slots 服务（inject 落空），页签不会注册'); return }
+        diag('apply：slots=' + !!slots)
+        // 注册 B站工作台为会话视图页签。对齐 0.2.1+ 官方形状：
+        // chat/trajectory 都是 { name, id, order, label, locale?, children?, inject? }。
+        const registerView = () => slots.register({
+          name: 'conversation.view', id: 'bili-wb', order: 30, label: 'B站工作台',
+        }, () => h(Shell))
         try {
-          slots.inject('conversation.view', () => slots.register({
-            name: 'conversation.view', id: 'bili-wb', order: 30, label: 'B站工作台', scope: 'session',
+          const ret = slots.inject('conversation.view', () => {
+            try { const r = registerView(); diag('conversation.view 注册成功'); return r }
+            catch (e) { diag('conversation.view 注册失败', e); throw e }
+          })
+          diag('slots.inject 返回 ' + (ret && ret.then ? 'Promise' : typeof ret))
+        } catch (e) { diag('slots.inject 抛错（槽位缺失或校验拒绝）', e) }
+        // 兜底入口：设置 → 插件页里放一个可打开的页签（桌面上 conversation.view
+        // 若因版本差异不可用，至少这里给用户一个入口，也不再静默）。
+        try {
+          slots.inject('settings.plugins.tab', () => slots.register({
+            name: 'settings.plugins.tab', id: 'bili-workbench', order: 40, label: 'B站工作台',
           }, () => h(Shell)))
-        } catch (e) { /* 没有这个槽位就算了 */ }
+          diag('settings.plugins.tab 兜底入口注册成功')
+        } catch (e) { diag('settings.plugins.tab 注册失败（无此槽位就忽略）', e) }
       },
     }
   },
