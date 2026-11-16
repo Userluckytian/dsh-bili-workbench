@@ -2001,7 +2001,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                 sm: true, disabled: llmBusy === 'list',
                 onClick: async () => {
                   setLlmBusy('list'); setLlmMsg('拉取中…')
-                  const r = await jget('/llm/models')
+                  const r = await jpost('/llm/models', { baseUrl: draft.llmBaseUrl || '', apiKey: draft.llmKey || '' })
                   setLlmBusy('')
                   if (r.ok) {
                     setLlmModels(r.models || [])
@@ -2022,7 +2022,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                 },
               }, llmBusy === 'reset' ? '重置中…' : '重置熔断'),
               llmMsg ? h('span', { 'data-wb-note': '' }, llmMsg) : null),
-            h(Note, {}, '改了端点或密钥先点底部保存，再拉取；拉取只读 /models，不产生费用。'),
+            h(Note, {}, '拉取直接用当前输入的地址与密钥，不必先保存；拉取只读 /models，不产生费用。'),
             h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, `模型链顺序（${chainArr.length} 个，失败自动切下一个）`),
               chainArr.length

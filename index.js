@@ -2710,9 +2710,13 @@ export function apply(ctx) {
     }
 
     /* ══════════ 文本模型端点：拉列表 / 熔断状态 / 手动重置 ══════════ */
-    if (req.method === 'GET' && path === '/llm/models') {
-      const base = llmBase()
-      const key = llmKeyValue()
+    if ((req.method === 'GET' || req.method === 'POST') && path === '/llm/models') {
+      // 拉取用当前输入：请求体带的 baseUrl/apiKey 优先，未带才回落已保存配置。
+      // 这样改了密钥不用先点保存也能测通。
+      const body = req.method === 'POST' ? await readBody(req) : {}
+      const base = String(body.baseUrl || llmBase()).trim().replace(/\/+$/, '')
+      const typed = String(body.apiKey || '').trim()
+      const key = typed && typed !== '__SAVED__' ? typed : llmKeyValue()
       if (!key) return sendJson(res, 200, { ok: false, base, error: '还没有模型密钥（设置里的 llmKey / 环境变量 OC_API_KEY）' })
       try {
         const r = await fetch(base + '/models', {
