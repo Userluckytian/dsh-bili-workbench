@@ -2008,7 +2008,10 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                     setLlmMsg(`端点 ${r.base} · ${(r.models || []).length} 个模型`)
                   } else {
                     setLlmModels(null)
-                    setLlmMsg(`拉取失败：${r.error || ''}`)
+                    const e = String(r.error || '')
+                    setLlmMsg(/^HTTP 404$/.test(e)
+                      ? '拉取失败：HTTP 404。宿主还是旧版（没有 POST /llm/models）：请完整重启 DSH，刷新页面不够。'
+                      : `拉取失败：${e}`)
                   }
                 },
               }, llmBusy === 'list' ? '拉取中…' : '拉取模型列表'),
