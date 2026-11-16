@@ -148,13 +148,15 @@ window.__ModuleLoader__.load({
     const CSS = `
 [data-wb-root]{
   --wb-bg:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 97%,var(--dsw-alias-label-primary,#0f1115));
-  --wb-card:var(--dsw-alias-bg-layer-1,#fff);
+  --wb-card:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base,#fff));
   --wb-card2:var(--dsw-alias-interactive-bg-hover,rgba(15,17,21,.05));
   --wb-line:var(--dsw-alias-border-l1,rgba(0,0,0,.06));
   --wb-line2:var(--dsw-alias-border-l2,rgba(0,0,0,.12));
   --wb-tx:var(--dsw-alias-label-primary,#0f1115);
-  --wb-dim:#4a5563;
-  --wb-dim2:#5f6b7a;
+  --wb-dim:#5a6472;
+  --wb-dim:color-mix(in srgb,var(--wb-tx) 72%,var(--wb-card));
+  --wb-dim2:#6b7583;
+  --wb-dim2:color-mix(in srgb,var(--wb-tx) 55%,var(--wb-card));
   --wb-acc:#fb7299;
   --wb-acc-tx:#c7365f;
   --wb-acc-soft:#fff0f4;
@@ -174,8 +176,6 @@ window.__ModuleLoader__.load({
 }
 body[data-ds-dark-theme] [data-wb-root]{color-scheme:dark}
 body[data-ds-dark-theme] [data-wb-root]{
-  --wb-dim:#cfd3d6;
-  --wb-dim2:#adb2b8;
   --wb-acc-tx:#ff8db0;
   --wb-acc-soft:rgba(251,114,153,.16);
   --wb-ok:#4ade80;
@@ -196,7 +196,7 @@ body[data-ds-dark-theme] [data-wb-btn][data-primary]{color:#151517;}
 [data-wb-brand]{font-size:14px;font-weight:750;padding:2px 8px 18px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;}
 [data-wb-brand] small{display:block;font-size:11px;font-weight:500;color:var(--wb-dim2);margin-top:3px;}
 [data-wb-nav]{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 11px;margin:0;
-  border:0;border-radius:10px;background:transparent;color:var(--wb-dim);font:inherit;font-size:13.5px;
+  border:0;border-radius:10px;background:transparent;color:var(--wb-tx);font:inherit;font-size:13.5px;
   font-weight:600;text-align:left;cursor:pointer;position:relative;white-space:nowrap;transition:background .15s,color .15s;}
 [data-wb-nav]:hover{background:var(--wb-card2);color:var(--wb-tx);}
 [data-wb-nav][aria-selected="true"]{background:var(--wb-acc-soft);color:var(--wb-acc-tx);font-weight:700;}
