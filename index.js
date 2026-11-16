@@ -2718,21 +2718,39 @@ export function apply(ctx) {
       const typed = String(body.apiKey || '').trim()
       const key = typed && typed !== '__SAVED__' ? typed : llmKeyValue()
       if (!key) return sendJson(res, 200, { ok: false, base, error: '还没有模型密钥（设置里的 llmKey / 环境变量 OC_API_KEY）' })
+      // 有的人只填到端口，有的把 /v1 写进去了；404 时自动换另一种拼法再试一次。
+      const candidates = []
+      const pushBase = (u) => {
+        const x = String(u || '').trim().replace(/\/+$/, '')
+        if (x && !candidates.includes(x)) candidates.push(x)
+      }
+      pushBase(base)
+      if (/\/v1$/i.test(base)) pushBase(base.replace(/\/v1$/i, ''))
+      else pushBase(base + '/v1')
       try {
-        const r = await fetch(base + '/models', {
-          headers: { authorization: `Bearer ${key}` },
-          signal: AbortSignal.timeout(15_000),
+        let last = null
+        for (const b of candidates) {
+          const r = await fetch(b + '/models', {
+            headers: { authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(15_000),
+          })
+          const text = await r.text()
+          if (r.status === 404) { last = { base: b, status: 404, text }; continue }
+          if (!r.ok) return sendJson(res, 200, { ok: false, base: b, error: `HTTP ${r.status} ${text.slice(0, 200)}` })
+          let j = {}
+          try { j = JSON.parse(text) } catch { return sendJson(res, 200, { ok: false, base: b, error: '端点返回的不是 JSON' }) }
+          const models = (j.data || []).map((m) => ({
+            id: String(m.id || ''),
+            modalities: m.metadata?.input_modalities || m.input_modalities || [],
+            reasoning: Boolean(m.reasoning),
+          })).filter((m) => m.id)
+          return sendJson(res, 200, { ok: true, base: b, models })
+        }
+        return sendJson(res, 200, {
+          ok: false,
+          base,
+          error: `HTTP 404 试过 ${candidates.join(' 与 ')}；确认地址是否带 /v1，或该网关是否有 /models`,
         })
-        const text = await r.text()
-        if (!r.ok) return sendJson(res, 200, { ok: false, base, error: `HTTP ${r.status} ${text.slice(0, 200)}` })
-        let j = {}
-        try { j = JSON.parse(text) } catch { return sendJson(res, 200, { ok: false, base, error: '端点返回的不是 JSON' }) }
-        const models = (j.data || []).map((m) => ({
-          id: String(m.id || ''),
-          modalities: m.metadata?.input_modalities || m.input_modalities || [],
-          reasoning: Boolean(m.reasoning),
-        })).filter((m) => m.id)
-        return sendJson(res, 200, { ok: true, base, models })
       } catch (e) {
         return sendJson(res, 200, { ok: false, base, error: String(e?.message ?? e).slice(0, 300) })
       }
