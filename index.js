@@ -85,6 +85,7 @@ const DEFAULTS = {
   enabled: false,
   keywords: [],
   llmKey: '',                    // 模型密钥（留空则读环境变量 OC_API_KEY）
+  llmBaseUrl: '',                // 模型端点（留空则读 BILI_OP_LLM_BASE，再回退本机 40080）
   /* 日常：只按时段 + 每天上限平均分配 */
   scheduleRanges: '00:00-24:00', // 多段：09:00-12:00, 20:00-23:30
   perDay: 48,                    // 每天最多采几条（同时是自动评论的每日上限）
@@ -245,6 +246,7 @@ function normalizeCfg(c) {
   out.frameCount = clampNum(out.frameCount, 1, 10, 10)
   out.keywords = (Array.isArray(out.keywords) ? out.keywords : []).map(String).filter(Boolean).slice(0, 20)
   out.llmKey = String(out.llmKey || '').slice(0, 300)
+  out.llmBaseUrl = String(out.llmBaseUrl || '').trim().replace(/\/+$/, '').slice(0, 300)
   out.scheduleRanges = parseRanges(out.scheduleRanges).length ? String(out.scheduleRanges) : '00:00-24:00'
   out.personaPrompt = String(out.personaPrompt ?? DEFAULT_PERSONA).slice(0, 1200)
   out.selfVideosEnabled = out.selfVideosEnabled !== false
@@ -353,7 +355,7 @@ const saveCfg = (patch) => {
 const loadSched = () => readJson(scheduleFile(), { lastRunAt: '', lastResult: '' })
 
 /* ───────────── 文本模型端点（40080）───────────── */
-const llmBase = () => String(process.env.BILI_OP_LLM_BASE || 'http://127.0.0.1:40080/v1').replace(/\/+$/, '')
+const llmBase = () => String(process.env.BILI_OP_LLM_BASE || loadCfg().llmBaseUrl || 'http://127.0.0.1:40080/v1').replace(/\/+$/, '')
 const llmKeyValue = () => String(process.env.OC_API_KEY || process.env.BILI_OP_LLM_KEY || loadCfg().llmKey || '')
 const llmBreakerFile = () => join(STORE, 'llm_breaker.json')
 function resetLlmBreaker() {
@@ -380,6 +382,7 @@ function runEngine(script, args = [], timeoutMs = 20 * 60_000, extraEnv = null) 
     if (cfg.ownerUid) env.BILI_OWNER_UID = cfg.ownerUid
     if (cfg.ownerCall) env.BILI_OWNER_CALL = cfg.ownerCall
     if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
+    if (!env.BILI_OP_LLM_BASE && cfg.llmBaseUrl) env.BILI_OP_LLM_BASE = cfg.llmBaseUrl
     let out = ''
     let done = false
     const finish = (r) => { if (!done) { done = true; resolvePromise(r) } }
@@ -406,6 +409,7 @@ function runOp(script, args = [], timeoutMs = 60_000) {
     BILI_OP_VISION_MODELS: cfg.visionChain.join(','),
   }
   if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
+  if (!env.BILI_OP_LLM_BASE && cfg.llmBaseUrl) env.BILI_OP_LLM_BASE = cfg.llmBaseUrl
   return new Promise((resolvePromise) => {
     const r = spawnSync(process.execPath, [join(BILI_OP, script), ...args], { cwd: BILI_OP, env, encoding: 'utf8', timeout: timeoutMs, windowsHide: true })
     resolvePromise({ ok: r.status === 0, text: `${r.stdout || ''}${r.stderr || ''}`, error: r.error ? String(r.error.message) : '' })
@@ -762,6 +766,7 @@ function startRender(project, plan, version, voice) {
     BILI_OP_VISION_MODELS: cfg.visionChain.join(','),
   }
   if (!env.OC_API_KEY && cfg.llmKey) env.OC_API_KEY = cfg.llmKey
+  if (!env.BILI_OP_LLM_BASE && cfg.llmBaseUrl) env.BILI_OP_LLM_BASE = cfg.llmBaseUrl
 
   const child = spawn(process.execPath, [
     join(BILI_OP, 'build.mjs'), '--run', runDir, '--burn', '--voice', usedVoice,
@@ -2685,7 +2690,7 @@ export function apply(ctx) {
       const body = await readBody(req)
       const patch = {}
       const copyKeys = [
-        'enabled', 'keywords', 'llmKey', 'scheduleRanges', 'perDay',
+        'enabled', 'keywords', 'llmKey', 'llmBaseUrl', 'scheduleRanges', 'perDay',
         'personaPrompt', 'reportLevel', 'favFolderId',
         'memoryEnabled', 'userCharLimit', 'memoryCharLimit', 'reflectEnabled', 'memoryEventsMax',
         'selfVideosEnabled', 'selfVideosUrl', 'selfVideosRefreshHours',

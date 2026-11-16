@@ -1745,6 +1745,28 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       if (cfgRes.loading || !draft) return h('div', { 'data-wb-loading': '' }, '读设置中…')
 
       const set = (k, v) => setDraft({ ...draft, [k]: v })
+      // —— 模型链编辑辅助（勾选 + 上下移，存回 modelChainText / visionChainText）——
+      const chainArr = String(draft.modelChainText || '').split('\n').map((s) => s.trim()).filter(Boolean)
+      const setChainArr = (arr) => set('modelChainText', Array.from(new Set(arr)).join('\n'))
+      const toggleChain = (id) => setChainArr(chainArr.includes(id) ? chainArr.filter((x) => x !== id) : [...chainArr, id])
+      const moveChain = (i, d) => {
+        const a = [...chainArr]
+        const j = i + d
+        if (j < 0 || j >= a.length) return
+        ;[a[i], a[j]] = [a[j], a[i]]
+        setChainArr(a)
+      }
+      const visionArr = String(draft.visionChainText || '').split('\n').map((s) => s.trim()).filter(Boolean)
+      const setVisionArr = (arr) => set('visionChainText', Array.from(new Set(arr)).join('\n'))
+      const toggleVision = (id) => setVisionArr(visionArr.includes(id) ? visionArr.filter((x) => x !== id) : [...visionArr, id])
+      const moveVision = (i, d) => {
+        const a = [...visionArr]
+        const j = i + d
+        if (j < 0 || j >= a.length) return
+        ;[a[i], a[j]] = [a[j], a[i]]
+        setVisionArr(a)
+      }
+      const visModels = (llmModels || []).filter((m) => (m.modalities || []).includes('image') && !/^crouton-/.test(m.id))
       const setMention = (i, k, v) => setDraft({
         ...draft,
         mentions: (draft.mentions || []).map((m, idx) => (idx === i ? { ...m, [k]: v } : m)),
@@ -1757,6 +1779,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           enabled: draft.enabled, scheduleRanges: draft.scheduleRanges, perDay: draft.perDay,
           keywords: String(draft.keywordsText || '').split('\n').map((s) => s.trim()).filter(Boolean),
           llmKey: draft.llmKey,
+          llmBaseUrl: draft.llmBaseUrl || '',
           personaPrompt: draft.personaPrompt, reportLevel: draft.reportLevel, favFolderId: draft.favFolderId,
           memoryEnabled: draft.memoryEnabled !== false,
           selfVideosEnabled: draft.selfVideosEnabled !== false,
@@ -1813,7 +1836,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '模型链'), h('b', {}, `${String(draft.modelChainText || '').split(String.fromCharCode(10)).filter(Boolean).length} 个`)),
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '长期记忆'), h('b', {}, draft.memoryEnabled === false ? '关' : '开'))),
           h('nav', { 'data-wb-settings-nav': '' },
-            ...[['set-schedule', '定时采集'], ['set-persona', '人设与偏好'], ['set-interact', '互动'], ['set-models', '模型顺序'], ['set-generation', '生成服务'], ['set-ui', '界面']].map(([id, label], i) =>
+            ...[['set-schedule', '定时采集'], ['set-persona', '人设与偏好'], ['set-interact', '互动'], ['set-models', '模型与生成'], ['set-voice', '配音'], ['set-ui', '界面']].map(([id, label], i) =>
               h('button', {
                 key: id, 'data-sel': i === 0 ? '' : undefined,
                 onClick: (ev) => {
@@ -1957,12 +1980,21 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               h('input', { 'data-wb-input': '', 'data-num': '', type: 'number', min: 3, max: 240, value: draft.dmWatchMinutes, onChange: (e) => set('dmWatchMinutes', e.target.value) }),
               h('span', {}, '分钟看一眼）'))),
 
-          h(Sec, { id: 'set-models', title: '模型顺序' },
-            h('textarea', {
-              'data-wb-input': '', 'data-area': '', rows: Math.max(4, (draft.modelChainText || '').split('\n').length),
-              value: draft.modelChainText, onChange: (e) => set('modelChainText', e.target.value),
-            }),
-            h(Note, {}, '一行一个；失败自动切换下一个，429 退避重试。连续 3 次整链失败后会停止请求上游，直到你保存模型链或点「重置熔断」。'),
+          h(Sec, { id: 'set-models', title: '模型与生成' },
+            h('div', { 'data-wb-h': '' }, '① 文本模型（对话 / 判定）'),
+            h(Field, { label: '端点地址' },
+              h('input', {
+                'data-wb-input': '', style: { maxWidth: '440px' }, value: draft.llmBaseUrl || '',
+                placeholder: 'http://127.0.0.1:40080/v1',
+                onChange: (e) => set('llmBaseUrl', e.target.value),
+              }),
+              h(Note, {}, '环境变量 BILI_OP_LLM_BASE 优先级最高；这里保存后生效。')),
+            h(Field, { label: '密钥' },
+              h('input', {
+                'data-wb-input': '', type: 'password', autocomplete: 'new-password', style: { maxWidth: '440px' },
+                value: draft.llmKey || '', placeholder: '已保存的显示为 __SAVED__；不动就不会覆盖',
+                onChange: (e) => set('llmKey', e.target.value),
+              })),
             h('div', { 'data-wb-row': '' },
               h(Btn, {
                 sm: true, disabled: llmBusy === 'list',
@@ -1972,20 +2004,13 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                   setLlmBusy('')
                   if (r.ok) {
                     setLlmModels(r.models || [])
-                    setLlmMsg(`端点 ${r.base} · ${(r.models || []).length} 个模型（点下方按钮填入）`)
+                    setLlmMsg(`端点 ${r.base} · ${(r.models || []).length} 个模型`)
                   } else {
                     setLlmModels(null)
                     setLlmMsg(`拉取失败：${r.error || ''}`)
                   }
                 },
-              }, llmBusy === 'list' ? '拉取中…' : '从端点拉取模型'),
-              h(Btn, {
-                sm: true, disabled: !llmModels?.length,
-                onClick: () => {
-                  set('modelChainText', (llmModels || []).map((m) => m.id).join('\n'))
-                  setLlmMsg('已填入全部模型，记得点保存')
-                },
-              }, '全部填入'),
+              }, llmBusy === 'list' ? '拉取中…' : '拉取模型列表'),
               h(Btn, {
                 sm: true, disabled: llmBusy === 'reset',
                 onClick: async () => {
@@ -1996,47 +2021,56 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                 },
               }, llmBusy === 'reset' ? '重置中…' : '重置熔断'),
               llmMsg ? h('span', { 'data-wb-note': '' }, llmMsg) : null),
-            llmModels?.length
-              ? h('div', { 'data-wb-kv': '' }, llmModels.map((m, i) => h('div', { key: i },
-                `${m.id}${(m.modalities || []).length > 1 ? ` · ${(m.modalities || []).join('/')}` : ''}${m.reasoning ? ' · 推理' : ''}`)))
-              : null,
+            h(Note, {}, '改了端点或密钥先点底部保存，再拉取；拉取只读 /models，不产生费用。'),
             h('div', { 'data-wb-col': '' },
-              h('div', { 'data-wb-h': '' }, '识图子智能体（独立模型链）'),
-              h('textarea', {
-                'data-wb-input': '', 'data-area': '', rows: Math.max(3, (draft.visionChainText || '').split('\n').length),
-                value: draft.visionChainText || '', onChange: (e) => set('visionChainText', e.target.value),
-              }),
-              h('Note', {}, '一行一个，只放**支持图片**的模型。@ 任务会先用这条链把画面转成文字，主链只吃文字——主链轮到纯文本模型也不影响。留空用默认 5 个视觉模型。'),
-              h('div', { 'data-wb-row': '' },
-                h(Btn, {
-                  sm: true, disabled: !llmModels?.length,
-                  onClick: () => {
-                    const vis = (llmModels || [])
-                      .filter((m) => (m.modalities || []).includes('image'))
-                      // 声明支持图但本机不可用的（地区限制等）不自动填入
-                      .filter((m) => !/^crouton-/.test(m.id))
-                      .map((m) => m.id)
-                    set('visionChainText', vis.join('\n'))
-                    setLlmMsg(`已填入 ${vis.length} 个支持图片的模型，记得点保存`)
-                  },
-                }, '填入可识图的模型'))),
-            h(Field, { label: '默认音色' },
-              h('select', { 'data-wb-input': '', style: { width: '220px' }, value: draft.voice, onChange: (e) => set('voice', e.target.value) },
-                h('optgroup', { label: 'Edge TTS（普通话）' },
-                  h('option', { value: 'zh-CN-YunxiNeural' }, '云希（男·青年）'),
-                  h('option', { value: 'zh-CN-XiaoxiaoNeural' }, '晓晓（女·通用/新闻）'),
-                  h('option', { value: 'zh-CN-XiaoyiNeural' }, '晓伊（女·年轻/卡通）'),
-                  h('option', { value: 'zh-CN-YunxiaNeural' }, '云夏（少年/卡通）'),
-                  h('option', { value: 'zh-CN-YunyangNeural' }, '云扬（男·新闻）'),
-                  h('option', { value: 'zh-CN-YunjianNeural' }, '云健（男·体育）')),
-                h('optgroup', { label: 'Edge TTS（台湾国语）' },
-                  h('option', { value: 'zh-TW-HsiaoChenNeural' }, '曉臻（女·台湾）'),
-                  h('option', { value: 'zh-TW-HsiaoYuNeural' }, '曉雨（女·台湾）'),
-                  h('option', { value: 'zh-TW-YunJheNeural' }, '雲哲（男·台湾）')),
-                h('optgroup', { label: '克隆音色（素材库）' },
-                  ...(voiceAssets.data?.voices || []).map((v) => h('option', { key: v.name, value: v.name }, `${v.name}${v.hasClone ? ' · 已克隆' : ' · 参考音'}`)))),
-              h(Btn, { sm: true, onClick: voiceAssets.reload }, '刷新音色'))),
-          h(Sec, { id: 'set-generation', title: '生成服务（生视频）' },
+              h('div', { 'data-wb-h': '' }, `模型链顺序（${chainArr.length} 个，失败自动切下一个）`),
+              chainArr.length
+                ? h('div', { 'data-wb-col': '', style: { gap: 4 } }, chainArr.map((id, i) => h('div', { key: id, 'data-wb-row': '', style: { alignItems: 'center', gap: 6 } },
+                  h('span', { 'data-wb-grow': '' }, `${i + 1}. ${id}`),
+                  h(Btn, { sm: true, onClick: () => moveChain(i, -1) }, '↑'),
+                  h(Btn, { sm: true, onClick: () => moveChain(i, 1) }, '↓'),
+                  h(Btn, { sm: true, onClick: () => setChainArr(chainArr.filter((x) => x !== id)) }, '移除'))))
+                : h(Note, {}, '还没选模型：先拉取，再在下面勾选。'),
+              llmModels?.length
+                ? h('details', { 'data-wb-col': '' },
+                  h('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 650 } }, `从端点勾选（${llmModels.length} 个）`),
+                  h('div', { 'data-wb-col': '', style: { marginTop: 6, maxHeight: 240, overflow: 'auto', gap: 2 } },
+                    llmModels.map((m) => h('label', { key: m.id, 'data-wb-toggle': '', style: { display: 'block', padding: '2px 0' } },
+                      h('input', { type: 'checkbox', checked: chainArr.includes(m.id), onChange: () => toggleChain(m.id) }),
+                      h('span', {}, `${m.id}${(m.modalities || []).length ? ` · ${(m.modalities || []).join('/')}` : ''}${m.reasoning ? ' · 推理' : ''}`)))))
+                : null,
+              h('details', { 'data-wb-col': '' },
+                h('summary', { style: { cursor: 'pointer', fontSize: 12 } }, '手动编辑'),
+                h('textarea', {
+                  'data-wb-input': '', 'data-area': '', rows: Math.max(3, chainArr.length),
+                  value: draft.modelChainText, onChange: (e) => set('modelChainText', e.target.value),
+                }))),
+            h(Note, {}, '一行一个；连续 3 次整链失败后会停止请求上游，直到你保存模型链或点「重置熔断」。'),
+            h('div', { 'data-wb-col': '', style: { marginTop: 14 } },
+              h('div', { 'data-wb-h': '' }, '② 识图模型（@ 任务先看图）'),
+              h(Note, {}, '只列声明支持图片的模型。@ 任务先用这条链把画面转文字，主链只吃文字。留空用默认 5 个视觉模型。'),
+              visionArr.length
+                ? h('div', { 'data-wb-col': '', style: { gap: 4 } }, visionArr.map((id, i) => h('div', { key: id, 'data-wb-row': '', style: { alignItems: 'center', gap: 6 } },
+                  h('span', { 'data-wb-grow': '' }, `${i + 1}. ${id}`),
+                  h(Btn, { sm: true, onClick: () => moveVision(i, -1) }, '↑'),
+                  h(Btn, { sm: true, onClick: () => moveVision(i, 1) }, '↓'),
+                  h(Btn, { sm: true, onClick: () => setVisionArr(visionArr.filter((x) => x !== id)) }, '移除'))))
+                : h(Note, {}, llmModels?.length ? '还没选识图模型：在下面勾选。' : '先拉取模型列表。'),
+              visModels.length
+                ? h('details', { 'data-wb-col': '' },
+                  h('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 650 } }, `可识图的模型（${visModels.length} 个）`),
+                  h('div', { 'data-wb-col': '', style: { marginTop: 6, maxHeight: 200, overflow: 'auto', gap: 2 } },
+                    visModels.map((m) => h('label', { key: m.id, 'data-wb-toggle': '', style: { display: 'block', padding: '2px 0' } },
+                      h('input', { type: 'checkbox', checked: visionArr.includes(m.id), onChange: () => toggleVision(m.id) }),
+                      h('span', {}, m.id)))))
+                : null,
+              h('details', { 'data-wb-col': '' },
+                h('summary', { style: { cursor: 'pointer', fontSize: 12 } }, '手动编辑'),
+                h('textarea', {
+                  'data-wb-input': '', 'data-area': '', rows: Math.max(3, visionArr.length),
+                  value: draft.visionChainText || '', onChange: (e) => set('visionChainText', e.target.value),
+                }))),
+            h('div', { 'data-wb-h': '', style: { marginTop: 18 } }, '③ 生视频'),
             h(Field, { label: '服务类型' },
               h('select', {
                 'data-wb-input': '', style: { width: '240px' },
@@ -2101,6 +2135,26 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               }, genBusy === 'conn' ? '测试中…' : '测试连接'),
               genBusy !== 'conn' && genMsg ? h('span', { 'data-wb-note': '' }, genMsg) : null),
             h(Note, {}, '测试连接只读 /v1/models，不产生费用。真跑一条视频请到素材库 → AI 视频 → 生成视频。')),
+
+          h(Sec, { id: 'set-voice', title: '配音' },
+            h('div', { 'data-wb-h': '' }, '④ 默认音色（成片配音）'),
+            h(Field, { label: '音色' },
+              h('select', { 'data-wb-input': '', style: { width: '260px' }, value: draft.voice, onChange: (e) => set('voice', e.target.value) },
+                h('optgroup', { label: 'Edge TTS（普通话）' },
+                  h('option', { value: 'zh-CN-YunxiNeural' }, '云希（男·青年）'),
+                  h('option', { value: 'zh-CN-XiaoxiaoNeural' }, '晓晓（女·通用/新闻）'),
+                  h('option', { value: 'zh-CN-XiaoyiNeural' }, '晓伊（女·年轻/卡通）'),
+                  h('option', { value: 'zh-CN-YunxiaNeural' }, '云夏（少年/卡通）'),
+                  h('option', { value: 'zh-CN-YunyangNeural' }, '云扬（男·新闻）'),
+                  h('option', { value: 'zh-CN-YunjianNeural' }, '云健（男·体育）')),
+                h('optgroup', { label: 'Edge TTS（台湾国语）' },
+                  h('option', { value: 'zh-TW-HsiaoChenNeural' }, '曉臻（女·台湾）'),
+                  h('option', { value: 'zh-TW-HsiaoYuNeural' }, '曉雨（女·台湾）'),
+                  h('option', { value: 'zh-TW-YunJheNeural' }, '雲哲（男·台湾）')),
+                h('optgroup', { label: '克隆音色（素材库）' },
+                  ...(voiceAssets.data?.voices || []).map((v) => h('option', { key: v.name, value: v.name }, `${v.name}${v.hasClone ? ' · 已克隆' : ' · 参考音'}`)))),
+              h(Btn, { sm: true, onClick: voiceAssets.reload }, '刷新音色')),
+            h(Note, {}, '克隆/导入音色在素材库 → 音色里管理；这里只选成片默认用哪个。')),
 
           h(Sec, { id: 'set-ui', title: '界面' },
             h('div', { 'data-wb-col': '' },
