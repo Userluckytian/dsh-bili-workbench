@@ -7,6 +7,23 @@
  */
 import { readJob, updateJob } from './jobstore.mjs'
 import { runJob, cancelUpstream } from './fal.mjs'
+import { runOpenAiVideo, cancelUpstream as cancelOpenAiVideo } from './video.mjs'
+import { saveAsset } from './fal.mjs'
+
+/**
+ * 按 job.provider 分派：
+ *   ''/'fal'  → 老的 fal 代理路径（含图片）
+ *   'openai'  → 标准 OpenAI 视频风格（只做视频，图片暂不走这条）
+ */
+async function dispatch(job, hooks) {
+  const provider = String(job.provider || '').toLowerCase()
+  if (provider === 'openai' && job.kind === 'video') {
+    const out = await runOpenAiVideo(job, hooks)
+    const asset = saveAsset({ job: { ...job, model: out.model || job.model }, ...out.got, billable: out.billable ?? null })
+    return { asset, billable: out.billable ?? null }
+  }
+  return runJob(job, hooks)
+}
 
 const args = process.argv.slice(2)
 const i = args.indexOf('--job')
@@ -38,7 +55,13 @@ function activeUpdate(patch) {
 async function stop(signal) {
   if (stopping) return
   stopping = true
-  if (upstreamId) await cancelUpstream(job.baseUrl, upstreamId)
+  if (upstreamId) {
+    if (String(job.provider || '').toLowerCase() === 'openai') {
+      await cancelOpenAiVideo(job.baseUrl, job.apiKey, upstreamId)
+    } else {
+      await cancelUpstream(job.baseUrl, upstreamId)
+    }
+  }
   const cur = readJob(id)
   if (cur && ['queued', 'running'].includes(cur.status)) {
     updateJob(id, {
@@ -74,7 +97,7 @@ const hooks = {
 }
 
 try {
-  const out = await runJob(job, hooks)
+  const out = await dispatch(job, hooks)
   const cur = readJob(id)
   if (cur && cur.status === 'cancelled') {
     console.log(`[${id}] finished after cancel; asset kept but job stays cancelled`)

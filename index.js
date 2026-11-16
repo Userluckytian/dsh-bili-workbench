@@ -130,14 +130,17 @@ const DEFAULTS = {
   dmOwnerUid: '',
   /* 出片 */
   voice: 'zh-CN-YunxiNeural',
-  /* 生成服务（本地 fal.ai 代理 / 任意 OpenAI 兼容端点） */
+  /* 生成服务（任意 OpenAI 兼容端点；视频走标准 /videos/generations） */
   generation: {
     enabled: true,
-    baseUrl: 'http://127.0.0.1:30001/v1',
-    t2i: 'fal-flux-schnell',
-    i2i: 'flux-dev-i2i',
-    t2v: 'ltx-video',
-    i2v: 'ltx-video-i2v',
+    provider: '',                // '' | 'openai'（标准视频风格）| 'fal'（老代理，已失效）
+    baseUrl: '',                 // 例：http://127.0.0.1:28000
+    apiKey: '',                  // Bearer；只给 worker 用，界面回显 __SAVED__
+    showcaseId: '',              // 上游案例 id（文生视频没有参考图时必填）
+    t2i: '',                     // 文生图模型（暂未接，留空）
+    i2i: '',                     // 图生图模型（暂未接，留空）
+    t2v: 'minimax-h3',           // 文生视频模型
+    i2v: 'minimax-h3',           // 图生视频模型
   },
   modelChain: DEFAULT_CHAIN,
   // 识图子智能体的模型链（独立于主链）：只有声明支持图片的模型才有意义
@@ -291,13 +294,17 @@ function normalizeCfg(c) {
   if (!out.visionChain.length) out.visionChain = [...DEFAULT_VISION_CHAIN]
   out.concurrency = clampNum(out.concurrency, 1, 8, 4)
   const gen = out.generation && typeof out.generation === 'object' ? out.generation : {}
+  const provider = String(gen.provider || '').trim()
   out.generation = {
     enabled: gen.enabled !== false,
-    baseUrl: String(gen.baseUrl || 'http://127.0.0.1:30001/v1').trim().replace(/\/+$/, '') || 'http://127.0.0.1:30001/v1',
-    t2i: String(gen.t2i || 'fal-flux-schnell').slice(0, 80),
-    i2i: String(gen.i2i || 'flux-dev-i2i').slice(0, 80),
-    t2v: String(gen.t2v || 'ltx-video').slice(0, 80),
-    i2v: String(gen.i2v || 'ltx-video-i2v').slice(0, 80),
+    provider: ['openai', 'fal'].includes(provider) ? provider : '',
+    baseUrl: String(gen.baseUrl || '').trim().replace(/\/+$/, '').slice(0, 300),
+    apiKey: String(gen.apiKey || '').trim().slice(0, 300),
+    showcaseId: String(gen.showcaseId || '').trim().slice(0, 120),
+    t2i: String(gen.t2i || '').slice(0, 80),
+    i2i: String(gen.i2i || '').slice(0, 80),
+    t2v: String(gen.t2v || 'minimax-h3').slice(0, 80),
+    i2v: String(gen.i2v || 'minimax-h3').slice(0, 80),
   }
   out.publishEnabled = Boolean(out.publishEnabled)
   out.defaultTags = (Array.isArray(out.defaultTags) ? out.defaultTags : String(out.defaultTags || '').split(','))
@@ -320,14 +327,27 @@ function normalizeCfg(c) {
 
 const loadCfg = () => normalizeCfg(readJson(configFile(), {}))
 /** 任何回传前端的配置都必须过这层：密钥用占位符代替，不回传明文 */
-const publicCfg = (cfg) => ({ ...cfg, llmKey: cfg.llmKey ? '__SAVED__' : '' })
+const publicCfg = (cfg) => ({
+  ...cfg,
+  llmKey: cfg.llmKey ? '__SAVED__' : '',
+  generation: cfg.generation
+    ? { ...cfg.generation, apiKey: cfg.generation.apiKey ? '__SAVED__' : '' }
+    : cfg.generation,
+})
 const saveCfg = (patch) => {
   const before = loadCfg()
+  // 前端回传占位符 = 用户没改密钥，保留旧值不覆盖
+  if (patch.generation && typeof patch.generation === 'object' && patch.generation.apiKey === '__SAVED__') {
+    patch.generation = { ...patch.generation, apiKey: before.generation?.apiKey || '' }
+  }
   const cfg = normalizeCfg({ ...before, ...patch })
   writeJson(configFile(), cfg)
   // 换了模型链/密钥 = 用户主动改了上游配置，解除「永久熔断」，允许重新试一次
   const chainChanged = JSON.stringify(before.modelChain) !== JSON.stringify(cfg.modelChain)
   if (chainChanged || before.llmKey !== cfg.llmKey) resetLlmBreaker()
+  // 生成服务的密钥同理：占位符表示没改，保留旧值
+  const genChanged = JSON.stringify(before.generation) !== JSON.stringify(cfg.generation)
+  if (genChanged) log('生成服务配置已更新')
   return cfg
 }
 const loadSched = () => readJson(scheduleFile(), { lastRunAt: '', lastResult: '' })
@@ -837,7 +857,7 @@ function localNoProxy() {
 }
 function generationBase() {
   const g = loadCfg().generation || {}
-  return String(g.baseUrl || 'http://127.0.0.1:30001/v1').replace(/\/+$/, '')
+  return String(g.baseUrl || '').trim().replace(/\/+$/, '')
 }
 
 /* ───────────── HTTP ───────────── */
@@ -1386,12 +1406,22 @@ export function apply(ctx) {
     /* ══════════ 生成服务（本地 fal.ai 代理 / OpenAI 兼容） ══════════ */
     if (req.method === 'GET' && path === '/generate/models') {
       localNoProxy()
+      const g = loadCfg().generation || {}
       const base = generationBase()
+      if (!base) return sendJson(res, 200, { ok: false, baseUrl: '', models: [], error: '还没有配置生成服务地址' })
       try {
-        const r = await fetch(base + '/models', { signal: AbortSignal.timeout(5000) })
+        // openai 风格要带鉴权头；老的 fal 代理不需要
+        const key = String(g.apiKey || '').trim()
+        const headers = String(g.provider || '') === 'openai' && key ? { authorization: `Bearer ${key}` } : {}
+        const r = await fetch(base + '/models', { headers, signal: AbortSignal.timeout(10_000) })
         if (!r.ok) throw new Error('HTTP ' + r.status)
         const j = await r.json()
-        return sendJson(res, 200, { ok: true, baseUrl: base, models: Array.isArray(j.data) ? j.data : [] })
+        const rows = Array.isArray(j.data) ? j.data : Array.isArray(j.models) ? j.models : []
+        return sendJson(res, 200, {
+          ok: true,
+          baseUrl: base,
+          models: rows.map((m) => ({ id: String(m?.id || ''), description: String(m?.description || '') })).filter((m) => m.id),
+        })
       } catch (e) {
         return sendJson(res, 200, { ok: false, baseUrl: base, models: [], error: String(e?.message ?? e) })
       }
@@ -1402,13 +1432,37 @@ export function apply(ctx) {
       const g = loadCfg().generation || {}
       if (g.enabled === false) return sendJson(res, 200, { ok: false, error: '生成服务未启用' })
       const base = generationBase()
+      if (!base) return sendJson(res, 200, { ok: false, error: '还没有配置生成服务地址' })
+      // openai 风格：视频走标准 /videos/generations（异步），图暂未接
+      if (String(g.provider || '') === 'openai' && g.kind !== 'image') {
+        const model = String(body.model || g.t2v || '').trim()
+        if (!model) return sendJson(res, 200, { ok: false, error: '没有配置视频模型' })
+        const api = /\/v1$/i.test(base) ? base : base + '/v1'
+        try {
+          const r = await fetch(api + '/videos/generations', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...(g.apiKey ? { authorization: `Bearer ${g.apiKey}` } : {}) },
+            body: JSON.stringify({ model, prompt: 'a cat sitting on a windowsill, warm sunlight', duration: 5 }),
+            signal: AbortSignal.timeout(60_000),
+          })
+          const text = await r.text()
+          let j = {}
+          try { j = JSON.parse(text) } catch { /* 非 JSON */ }
+          if (!r.ok) return sendJson(res, 200, { ok: false, error: (j?.error?.message || j?.error || text.slice(0, 200)) })
+          const id = String(j?.id || j?.task_id || '')
+          if (!id) return sendJson(res, 200, { ok: false, error: '提交成功但没有返回任务 id：' + text.slice(0, 200) })
+          return sendJson(res, 200, { ok: true, model, taskId: id, note: '已提交（异步任务），到素材库 AI 视频里看进度' })
+        } catch (e) {
+          return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
+        }
+      }
       const model = String(body.model || g.t2i || 'fal-flux-schnell')
       const prompt = String(body.prompt || 'a simple red apple on a wooden table, studio product photo').slice(0, 500)
       localNoProxy()
       try {
         const r = await fetch(base + '/images/generations', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...(g.apiKey ? { authorization: `Bearer ${g.apiKey}` } : {}) },
           body: JSON.stringify({ model, prompt, size: '512x512', n: 1 }),
           signal: AbortSignal.timeout(180_000),
         })
@@ -1428,7 +1482,8 @@ export function apply(ctx) {
       if (kind === 'image' || kind === 'video') rows = rows.filter((j) => j.kind === kind)
       return sendJson(res, 200, {
         ok: true,
-        jobs: rows,
+        // apiKey 只给 worker 用，出口一律脱敏
+        jobs: rows.map(({ apiKey, ...rest }) => ({ ...rest, apiKey: apiKey ? '__SAVED__' : '' })),
         active: rows.filter((j) => ['queued', 'running'].includes(j.status)).length,
       })
     }
@@ -1447,14 +1502,24 @@ export function apply(ctx) {
       }
       const model = String(body.model || g[mode] || '').trim()
       if (!model) return sendJson(res, 200, { ok: false, error: '设置里没有为 ' + mode + ' 配模型' })
+      if (String(g.provider || '') === 'openai' && kind === 'image') {
+        return sendJson(res, 200, { ok: false, error: 'OpenAI 兼容模式目前只接视频（/v1/videos/generations）；生图请用素材库既有工具或其它端点' })
+      }
+      const params = body.params && typeof body.params === 'object' ? { ...body.params } : {}
+      // 文生视频没有参考图时，上游要求带 showcase_id；设置里填了就自动带
+      if (mode === 't2v' && String(g.provider || '') === 'openai' && g.showcaseId && !params.showcase_id) {
+        params.showcase_id = String(g.showcaseId)
+      }
       const job = genStore.createJob({
         kind,
         mode,
         model,
         baseUrl: generationBase(),
+        provider: String(g.provider || '').trim(),
+        apiKey: String(g.apiKey || '').trim(),
         prompt,
         refImages,
-        params: body.params && typeof body.params === 'object' ? body.params : {},
+        params,
         parentId: body.parentId,
         title: body.title,
         priority: body.priority,
@@ -1479,7 +1544,9 @@ export function apply(ctx) {
       }
       if (req.method === 'GET') {
         const job = genStore.readJob(id)
-        return sendJson(res, 200, job ? { ok: true, job } : { ok: false, error: '没有这个任务' })
+        if (!job) return sendJson(res, 200, { ok: false, error: '没有这个任务' })
+        const { apiKey, ...safe } = job
+        return sendJson(res, 200, { ok: true, job: { ...safe, apiKey: apiKey ? '__SAVED__' : '' } })
       }
     }
 

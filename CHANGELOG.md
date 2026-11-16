@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.4 — 2026-11-16
+
+**生成服务改成标准 OpenAI 视频协议，fal 退役。**
+
+### 变更
+
+- **新增 `engine/generation/video.mjs`**：只用三个标准端点——`POST /v1/videos/generations` 提交、`GET /v1/videos/generations/{id}` 轮询、`GET .../content` 取成片（支持 Range）。不依赖任何服务商私有路径，`baseUrl` 写 `host:port` 或 `host:port/v1` 都行。
+- **worker 按 `provider` 分派**：`openai` 走新链路，`''`/`fal` 保留旧逻辑；取消任务也按同一分派走对应的 cancel。
+- **密钥只给 worker**：任务 JSON 里的 `apiKey` 在 `/generate/jobs` 出口一律脱敏成 `__SAVED__`，前端回传占位符时不会覆盖已存密钥。
+- **设置 → 生成服务**：服务类型、baseUrl、密钥、文生/图生视频模型四栏；清空 fal 时代残留的默认地址与模型（`127.0.0.1:30001`、`ltx-video` 等）。
+- **新增可选 `showcase_id`**：部分服务（SiftQ/minimax）的文生视频必须带案例 id，图生视频给参考图则不用。
+- **生图边界说清楚**：`openai` 模式暂只接视频，生图请求直接返回明确错误，不再落到失效的 fal 路径。
+
+### 实测
+
+- 本机 SiftQ（`127.0.0.1:28000`）：`GET /v1/models` 通过，返回 `minimax-h3` / `minimax-h3-free` / `minimax-h3-credits` 三个模型。
+- 真实提交：图生视频请求在 142 s 后收到上游 `502 ... EOF`（`siftq.com/api/minimax-trial/showcase/video-generation`），属上游链路问题，不是插件侧参数错误；待上游恢复后可直接复测。
+
+## 1.3.3 — 2026-11-14
+
+**诊断条不再常驻，默认只留 console。**
+
+### 修复
+
+- **诊断条不再常驻**：1.3.1 引入的 `#bili-wb-diag`（黑底绿字、固定在窗口左下角、`z-index:99999`）在正常挂载时也会渲染，长期压住输入区且无法关闭。现在它默认**完全不创建**——诊断信息只走 `console`（成功路径降到 `debug`，不再刷红字）。需要现场排查时，在浏览器控制台执行 `localStorage.setItem('bili-wb:diag','1')` 再刷新；排查完 `localStorage.removeItem('bili-wb:diag')` 关掉。开启后浮层改为右下角小卡片（可滚动、可关闭），且升级后旧版本遗留的节点会被自动清除。
+
 ## 1.3.2 — 2026-11-14
 
 **素材库性能改造 + 菜单可勾选。数据多了不再卡。**

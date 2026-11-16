@@ -100,7 +100,7 @@ function appendIndex(dir, entry) {
   writeFileSync(file, JSON.stringify(arr, null, 2))
 }
 
-function saveAsset({ job, buf, ext, contentType, billable }) {
+export function saveAsset({ job, buf, ext, contentType, billable }) {
   const sub = job.kind === 'video' ? 'videos' : 'images'
   const dir = join(assetsRoot(), 'generated', sub)
   mkdirSync(dir, { recursive: true })

@@ -79,6 +79,10 @@ export function createJob(input = {}) {
     mode,
     model: String(input.model || '').trim().slice(0, 80),
     baseUrl: String(input.baseUrl || '').trim().slice(0, 300),
+    // 生成服务商：'' | 'fal'（老代理）| 'openai'（标准 OpenAI 视频风格）
+    provider: String(input.provider || '').trim().slice(0, 20),
+    // 鉴权：只给 worker 用，界面上永远不回显明文
+    apiKey: String(input.apiKey || '').trim().slice(0, 300),
     prompt,
     refImages,
     params,

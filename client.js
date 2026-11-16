@@ -2036,15 +2036,57 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                 h('optgroup', { label: '克隆音色（素材库）' },
                   ...(voiceAssets.data?.voices || []).map((v) => h('option', { key: v.name, value: v.name }, `${v.name}${v.hasClone ? ' · 已克隆' : ' · 参考音'}`)))),
               h(Btn, { sm: true, onClick: voiceAssets.reload }, '刷新音色'))),
-          h(Sec, { id: 'set-generation', title: '生成服务' },
-            h(Field, { label: '服务地址' },
+          h(Sec, { id: 'set-generation', title: '生成服务（生视频）' },
+            h(Field, { label: '服务类型' },
+              h('select', {
+                'data-wb-input': '', style: { width: '240px' },
+                value: draft.generation?.provider || '',
+                onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), provider: e.target.value } }),
+              },
+                h('option', { value: '' }, '未启用'),
+                h('option', { value: 'openai' }, 'OpenAI 兼容（标准 /videos/generations）'),
+                h('option', { value: 'fal' }, 'fal 代理（旧，已失效）')),
+              h(Note, {}, '选 OpenAI 兼容时，插件只用 baseUrl 拼标准路径，不依赖任何服务商私有接口。')),
+            h(Field, { label: '服务地址（baseUrl）' },
               h('input', {
                 'data-wb-input': '',
                 value: draft.generation?.baseUrl || '',
-                placeholder: 'http://127.0.0.1:30001/v1',
+                placeholder: 'http://127.0.0.1:28000',
                 onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), baseUrl: e.target.value } }),
               }),
-              h(Note, {}, '本地 fal.ai 代理或任意 OpenAI 兼容端点；模型选择在创作页。')),
+              h(Note, {}, '写到端口即可（可带 /v1）；插件自动补 /v1/videos/generations。')),
+            h(Field, { label: '密钥（可留空）' },
+              h('input', {
+                'data-wb-input': '', type: 'password', autocomplete: 'new-password',
+                value: draft.generation?.apiKey || '',
+                placeholder: '掩码显示已保存；留空表示不需要鉴权',
+                onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), apiKey: e.target.value } }),
+              }),
+              h(Note, {}, '配了就带 Authorization: Bearer。已保存的密钥显示为 __SAVED__，不动就不会覆盖。')),
+            h('div', { 'data-wb-row': '' },
+              h(Field, { label: '文生视频模型' },
+                h('input', {
+                  'data-wb-input': '', style: { width: '220px' },
+                  value: draft.generation?.t2v || '',
+                  placeholder: 'minimax-h3',
+                  onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), t2v: e.target.value } }),
+                })),
+              h(Field, { label: '图生视频模型' },
+                h('input', {
+                  'data-wb-input': '', style: { width: '220px' },
+                  value: draft.generation?.i2v || '',
+                  placeholder: 'minimax-h3',
+                  onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), i2v: e.target.value } }),
+                }))),
+            h(Field, { label: 'Showcase ID（可选）' },
+              h('input', {
+                'data-wb-input': '', style: { width: '260px' },
+                value: draft.generation?.showcaseId || '',
+                placeholder: '留空；文生视频没参考图时上游要求',
+                onChange: (e) => setDraft({ ...draft, generation: { ...(draft.generation || {}), showcaseId: e.target.value } }),
+              }),
+              h(Note, {}, '部分服务（如 SiftQ/minimax）的文生视频必须带一个 showcase_id；图生视频给参考图就不用填。')),
+            h(Note, {}, '生图暂未接入（当前端点没有标准的 /images/generations）。分镜图请走素材库或其它工具，成片视频用这里。'),
             h('div', { 'data-wb-row': '' },
               h(Btn, {
                 sm: true, disabled: genBusy === 'conn',
@@ -2052,21 +2094,13 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                   setGenBusy('conn'); setGenMsg('连接中…')
                   const r = await jget('/generate/models')
                   setGenBusy('')
-                  setGenMsg(r.ok ? `连接成功：${r.models?.length || 0} 个模型` : `连接失败：${r.error || ''}`)
+                  setGenMsg(r.ok
+                    ? `连接成功：${(r.models || []).length} 个模型${(r.models || []).length ? '（' + (r.models || []).map((m) => m.id).slice(0, 3).join(' / ') + '…）' : ''}`
+                    : `连接失败：${r.error || ''}`)
                 },
               }, genBusy === 'conn' ? '测试中…' : '测试连接'),
-              h(Btn, {
-                sm: true, disabled: genBusy === 'gen',
-                onClick: async () => {
-                  if (!window.confirm('会用最便宜的文生图模型真实生成 1 张 512×512，约 $0.003，继续？')) return
-                  setGenBusy('gen'); setGenMsg('测试生成中…')
-                  const r = await jpost('/generate/test', { model: 'fal-flux-schnell', confirm: true })
-                  setGenBusy('')
-                  setGenMsg(r.ok ? `测试成功：${r.url}` : `测试失败：${errText(r) || ''}`)
-                },
-              }, genBusy === 'gen' ? '测试中…' : '测试生成（约 $0.003）'),
-              genMsg ? h('span', { 'data-wb-note': '' }, genMsg) : null),
-            h(Note, {}, '测试连接只读 /v1/models；测试生成会真实计费，只测最便宜的文生图。')),
+              genBusy !== 'conn' && genMsg ? h('span', { 'data-wb-note': '' }, genMsg) : null),
+            h(Note, {}, '测试连接只读 /v1/models，不产生费用。真跑一条视频请到素材库 → AI 视频 → 生成视频。')),
 
           h(Sec, { id: 'set-ui', title: '界面' },
             h('div', { 'data-wb-col': '' },
