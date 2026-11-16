@@ -538,7 +538,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           h('div', { 'data-wb-cardtitle': '', style: { minWidth: 0 } }, r.title || '(无标题)'),
           h('div', { 'data-wb-meta': '', title: fullMeta }, metaText),
           r.judge ? h('div', { 'data-wb-why': '', title: r.judge.why || '' }, r.judge.why || '还没有 AI 评级')
-            : h('div', { 'data-wb-note': '' }, '还没判定 —— 去「刷 B 站 → 设置」跑一轮'),
+            : h('div', { 'data-wb-note': '' }, '还没判定 —— 去「设置 → 采集」跑一轮'),
           h('div', { 'data-wb-row': '' },
             quoteCount
               ? h('button', { 'data-wb-fact': '', onClick: () => onDetail(r.bvid) }, `${quoteCount} 条金句`)
@@ -1104,7 +1104,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
                 !hasRefOption && ref ? h('option', { value: ref }, refFile) : null,
                 ...items.map((it) => h('option', { key: it.file, value: `generated/images/${it.file}` }, it.title || it.file)))) : null,
             h('div', { 'data-wb-meta': '' },
-              `将使用：${model || '未配置（去设置 → 生成服务）'} · 按设置里的默认模型生成`),
+              `将使用：${model || '未配置（去设置 → 模型管理）'} · 按设置里的默认模型生成`),
             msg ? h(Err, {}, msg) : null),
           h('div', { 'data-wb-modal-foot': '' },
             h('div', { 'data-wb-grow': '' }),
@@ -1836,7 +1836,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '模型链'), h('b', {}, `${String(draft.modelChainText || '').split(String.fromCharCode(10)).filter(Boolean).length} 个`)),
             h('div', { 'data-wb-summary-row': '' }, h('span', {}, '长期记忆'), h('b', {}, draft.memoryEnabled === false ? '关' : '开'))),
           h('nav', { 'data-wb-settings-nav': '' },
-            ...[['set-schedule', '定时采集'], ['set-persona', '人设与偏好'], ['set-interact', '互动'], ['set-models', '模型与生成'], ['set-voice', '配音'], ['set-ui', '界面']].map(([id, label], i) =>
+            ...[['set-models', '模型管理'], ['set-schedule', '采集'], ['set-persona', '人设与互动'], ['set-ui', '界面']].map(([id, label], i) =>
               h('button', {
                 key: id, 'data-sel': i === 0 ? '' : undefined,
                 onClick: (ev) => {
@@ -1852,7 +1852,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               }, label))),
           h(Note, {}, '改完点底部「保存设置」。切换分组不会丢失未保存内容。')),
         h('div', { 'data-wb-settings-main': '' },
-          h(Sec, { id: 'set-schedule', title: '定时采集' },
+          h(Sec, { id: 'set-schedule', title: '定时采集', style: { order: 3 } },
             h('label', { 'data-wb-toggle': '' },
               h('input', { type: 'checkbox', checked: Boolean(draft.enabled), onChange: (e) => set('enabled', e.target.checked) }),
               h('span', {}, '开启定时采集')),
@@ -1869,7 +1869,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               h(Btn, { sm: true, disabled: busy === 'run', onClick: run }, busy === 'run' ? '跑一轮中…' : '立即跑一轮'),
               h(Note, {}, '不等定时，现在就采一轮'))),
 
-          h(Sec, { id: 'set-persona', title: '人设与偏好' },
+          h(Sec, { id: 'set-persona', title: '人设与互动', style: { order: 4 } },
             h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, '关注关键词（一行一个；和视频页标签同步，采集时与热门混合）'),
               h('textarea', { 'data-wb-input': '', 'data-area': '', rows: 4, value: draft.keywordsText, onChange: (e) => set('keywordsText', e.target.value) })),
@@ -1905,7 +1905,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
             h(Field, { label: '自动收藏到' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.favFolderId || '', onChange: (e) => set('favFolderId', e.target.value), placeholder: '收藏夹 ID / 名称（留空不收藏）' }))),
 
-          h(Sec, { id: 'set-interact', title: '互动' },
+          h(Sec, { id: 'set-interact', title: '互动与回复', style: { order: 5 } },
             h(Field, { label: '主人 UID' },
               h('input', { 'data-wb-input': '', style: { maxWidth: '180px' }, value: draft.ownerUid || '', onChange: (e) => set('ownerUid', e.target.value), placeholder: '例如 123456789（你的 UID）' }),
               h(Note, {}, '只有这个 UID 的指令会被当主人；其他人问统计/配置会收到一句礼貌拒绝，不会拿到数据')),
@@ -1980,7 +1980,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               h('input', { 'data-wb-input': '', 'data-num': '', type: 'number', min: 3, max: 240, value: draft.dmWatchMinutes, onChange: (e) => set('dmWatchMinutes', e.target.value) }),
               h('span', {}, '分钟看一眼）'))),
 
-          h(Sec, { id: 'set-models', title: '模型与生成' },
+          h(Sec, { id: 'set-models', title: '模型管理', style: { order: 1 } },
             h('div', { 'data-wb-h': '' }, '① 文本模型（对话 / 判定）'),
             h(Field, { label: '端点地址' },
               h('input', {
@@ -2136,7 +2136,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               genBusy !== 'conn' && genMsg ? h('span', { 'data-wb-note': '' }, genMsg) : null),
             h(Note, {}, '测试连接只读 /v1/models，不产生费用。真跑一条视频请到素材库 → AI 视频 → 生成视频。')),
 
-          h(Sec, { id: 'set-voice', title: '配音' },
+          h(Sec, { id: 'set-voice', title: '配音', style: { order: 2 } },
             h('div', { 'data-wb-h': '' }, '④ 默认音色（成片配音）'),
             h(Field, { label: '音色' },
               h('select', { 'data-wb-input': '', style: { width: '260px' }, value: draft.voice, onChange: (e) => set('voice', e.target.value) },
@@ -2156,28 +2156,28 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
               h(Btn, { sm: true, onClick: voiceAssets.reload }, '刷新音色')),
             h(Note, {}, '克隆/导入音色在素材库 → 音色里管理；这里只选成片默认用哪个。')),
 
-          h(Sec, { id: 'set-ui', title: '界面' },
+          h(Sec, { id: 'set-ui', title: '界面', style: { order: 6 } },
             h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, '左侧模块（勾选要显示的）'),
               h('div', { 'data-wb-row': '', style: { flexWrap: 'wrap', gap: '6px 18px' } },
                 ...UI_TABS.map(([k, label]) => {
                   const list = draft.ui?.tabs || UI_TABS.map(([x]) => x)
-                  const isMine = k === 'mine'
+                  const isFixed = k === 'mine' || k === 'settings'
                   const on = list.includes(k)
-                  return h('label', { key: k, 'data-wb-toggle': '', title: isMine ? '设置入口，不可隐藏' : '' },
+                  return h('label', { key: k, 'data-wb-toggle': '', title: isFixed ? '固定入口，不可隐藏' : '' },
                     h('input', {
-                      type: 'checkbox', checked: on, disabled: isMine,
+                      type: 'checkbox', checked: on, disabled: isFixed,
                       onChange: (e) => {
                         const cur = new Set(draft.ui?.tabs || UI_TABS.map(([x]) => x))
                         if (e.target.checked) cur.add(k); else cur.delete(k)
-                        // 至少保留一项；「我的」永远在
-                        const next = UI_TABS.map(([x]) => x).filter((x) => cur.has(x) || x === 'mine')
+                        // 至少保留一项；「设置」「我的」永远在
+                        const next = UI_TABS.map(([x]) => x).filter((x) => cur.has(x) || x === 'mine' || x === 'settings')
                         set('ui', { ...(draft.ui || {}), tabs: next })
                       },
                     }),
-                    h('span', {}, label + (isMine ? '（固定）' : '')))
+                    h('span', {}, label + (isFixed ? '（固定）' : '')))
                 })),
-              h(Note, {}, '取消勾选后对应模块从左侧消失，至少保留一项。「我的」是设置入口，不可隐藏。')),
+              h(Note, {}, '取消勾选后对应模块从左侧消失，至少保留一项。「设置」「我的」是固定入口，不可隐藏。')),
             h('div', { 'data-wb-col': '' },
               h('div', { 'data-wb-h': '' }, '素材库分类（勾选要显示的）'),
               h('div', { 'data-wb-row': '', style: { flexWrap: 'wrap', gap: '6px 18px' } },
@@ -2207,7 +2207,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         ))
     }
 
-    function TabScroll() {
+    function TabScroll({ go }) {
       const [sub, setSub] = useState('video')
       const [running, setRunning] = useState(false)
       const [runMsg, setRunMsg] = useState('')
@@ -2315,20 +2315,19 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           setEditTags(false)
         },
       },
-        h('div', { 'data-wb-sticky-header': '', 'data-wb-static': sub === 'set' ? '' : undefined },
+        h('div', { 'data-wb-sticky-header': '' },
           h(PageHead, {
-            title: sub === 'msg' ? '刷 B 站 · 消息' : sub === 'set' ? '刷 B 站 · 设置' : '刷 B 站',
+            title: sub === 'msg' ? '刷 B 站 · 消息' : '刷 B 站',
             sub: sub === 'msg'
               ? '未读、回复、@、私信 —— 回复先给草稿'
-              : sub === 'set'
-                ? '定时采集、人设、互动与模型顺序'
-                : '边刷边挑：热门、搜索、消息与自动采集设置',
+              : '边刷边挑：热门、搜索与消息',
           },
             h('span', { 'data-wb-chip': '' }, `今日已采 ${cfgRes.data?.schedule?.todayCount ?? '?'} 条`),
             h(Btn, { sm: true, primary: true, disabled: running, onClick: runRound }, running ? '跑一轮中…' : '立即跑一轮'),
+            h(Btn, { sm: true, onClick: () => go?.('settings') }, '采集设置'),
             sub === 'video' ? h(Btn, { sm: true, onClick: () => { cfgRes.reload(); store.reload() } }, '刷新') : null),
           h('div', { 'data-wb-row': '', 'data-wb-subtabs': '' },
-            ...[['video', '视频'], ['msg', '消息'], ['set', '设置']].map(([k, l]) =>
+            ...[['video', '视频'], ['msg', '消息']].map(([k, l]) =>
               h('button', { key: k, 'data-wb-btn': '', 'data-sm': '', 'data-primary': sub === k ? '' : undefined, onClick: () => setSub(k) }, l)),
             h('div', { 'data-wb-grow': '' }),
             sub === 'video' ? h('input', {
@@ -2349,8 +2348,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           runMsg ? h(Note, {}, runMsg) : null),
         sub === 'video' ? keywordBar : null,
         sub === 'video' ? h(SubVideo, { storeMap, cfg: cfgRes.data?.config, onCommented: store.reload, searchKey: key, items, loading: itemsLoading, err: itemsErr }) : null,
-        sub === 'msg' ? h(SubInbox, { onCommented: store.reload, cfg: cfgRes.data?.config, inbox }) : null,
-        sub === 'set' ? h(SubSettings, { onRunRound: () => store.reload(), onSaved: cfgRes.reload }) : null)
+        sub === 'msg' ? h(SubInbox, { onCommented: store.reload, cfg: cfgRes.data?.config, inbox }) : null)
     }
 
     /* ═══════════════════ ③ 创作 / 出片 ═══════════════════ */
@@ -3250,76 +3248,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         msg ? h(Note, {}, msg) : null)
     }
 
-    /* ── 创作页：生成模型选择（服务地址在设置里） ── */
-    function GenerationModelsCard() {
-      const cfgRes = useApi('/config')
-      const modelsRes = useApi('/generate/models')
-      const [gen, setGen] = useState(null)
-      const [busy, setBusy] = useState('')
-      const [msg, setMsg] = useState('')
-      const [testUrl, setTestUrl] = useState('')
-      useEffect(() => {
-        const g = cfgRes.data?.config?.generation
-        if (g && gen === null) setGen({ ...g })
-      }, [cfgRes.data, gen])
-      const models = modelsRes.data?.models || []
-      const groups = [
-        ['t2i', '文生图', 'text2image'],
-        ['i2i', '图生图 / 编辑', 'image2image'],
-        ['t2v', '文生视频', 'text2video'],
-        ['i2v', '图生视频', 'image2video'],
-      ]
-      const save = async () => {
-        if (!gen) return
-        setBusy('save')
-        const r = await jpost('/config', { generation: gen })
-        setBusy('')
-        setMsg(r.ok ? '已保存模型选择' : ('保存失败：' + (errText(r) || '')))
-        if (r.ok) cfgRes.reload()
-      }
-      const test = async () => {
-        if (!window.confirm('会用最便宜的文生图模型真实生成 1 张 512×512，约 $0.003，继续？')) return
-        setBusy('test'); setMsg('测试生成中…')
-        const r = await jpost('/generate/test', { model: 'fal-flux-schnell', confirm: true })
-        setBusy('')
-        if (r.ok) { setTestUrl(r.url); setMsg(`测试成功：${r.model} · 计费 ${r.billable || '?'} 单位`) }
-        else setMsg('测试失败：' + (errText(r) || ''))
-      }
-      if (!gen) return h(Sec, { title: '生成模型' }, h(Note, {}, cfgRes.loading ? '读配置…' : '还没读到生成服务配置'))
-      return h(Sec, { title: '生成模型' },
-        h('div', { 'data-wb-row': '' },
-          h(Note, {}, `服务：${cfgRes.data?.config?.generation?.baseUrl || modelsRes.data?.baseUrl || '-'}`),
-          h('div', { 'data-wb-grow': '' }),
-          h(Btn, { sm: true, onClick: modelsRes.reload }, '刷新模型'),
-          h(Btn, { sm: true, primary: true, disabled: busy === 'save', onClick: save }, busy === 'save' ? '保存中…' : '保存模型')),
-        h('div', { 'data-wb-row': '' },
-          ...groups.map(([key, label, task]) => {
-            const opts = models.filter((m) => m.task === task)
-            const cur = gen[key] || ''
-            const known = opts.some((m) => m.id === cur)
-            return h('div', { key, style: { flex: '1 1 150px', minWidth: 0 } },
-              h('div', { 'data-wb-h': '' }, label),
-              h('select', {
-                'data-wb-input': '', value: cur,
-                onChange: (e) => setGen({ ...gen, [key]: e.target.value }),
-              },
-              !known && cur ? h('option', { value: cur }, `${cur}（当前配置，列表里没有）`) : null,
-              ...opts.map((m) => h('option', { key: m.id, value: m.id }, `${m.id}${m.mode === 'queue' ? ' · 队列' : ''}`))),
-              h('div', { 'data-wb-meta': '', style: { marginTop: 3 } },
-                opts.find((m) => m.id === cur)?.description || '—'))
-          })),
-        h('div', { 'data-wb-row': '' },
-          h(Btn, { sm: true, disabled: busy === 'test', onClick: test }, busy === 'test' ? '测试中…' : '测试生成（约 $0.003）'),
-          h(Note, {}, '只测最便宜的文生图；视频/编辑测试请用 30001 控制台。'),
-          msg ? h('span', { 'data-wb-note': '' }, msg) : null),
-        testUrl ? h('div', { 'data-wb-row': '' },
-          h('img', { src: testUrl, alt: '', style: { width: 160, borderRadius: 8, border: '1px solid var(--wb-line)' } }),
-          h('a', { href: testUrl, target: '_blank', rel: 'noreferrer', 'data-wb-note': '' }, '打开测试图 ↗')) : null,
-        !modelsRes.loading && !models.length ? h(Err, {}, modelsRes.data?.error || '生成服务不可达；检查 30001 是否启动') : null,
-        h(Note, {}, '模型选择会用于创作任务；服务地址/连接在「刷 B 站 → 设置 → 生成服务」。'))
-    }
-
-    function TabCreate() {
+    function TabCreate({ go: goTab }) {
       const [brief, setBrief] = useState('')
       const [busy, setBusy] = useState('')
       const [log, setLog] = useState('')
@@ -3355,7 +3284,11 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       }
       return h('div', { 'data-wb-page': '' },
         h(PageHead, { title: '创作 / 出片', sub: '说一句想做什么，先生成方案蓝图；确认分镜、角色、配音、素材、模型后，再渲染' }),
-        h(GenerationModelsCard),
+        h(Sec, { title: '生成模型' },
+          h('div', { 'data-wb-row': '' },
+            h(Note, {}, '模型、密钥与服务地址统一在「设置 → 模型管理」里配；这里只负责用。'),
+            h('div', { 'data-wb-grow': '' }),
+            h(Btn, { sm: true, onClick: () => goTab?.('settings') }, '打开模型管理'))),
         h('div', { 'data-wb-sec': '', style: { gap: 10 } },
           h('div', { 'data-wb-projtitle': '' }, '想做什么样的片子？'),
           h('div', { 'data-wb-note': '' }, '描述主题、语气和时长就行。素材不够时，AI 会按关键词去「刷 B 站」补素材。'),
@@ -3400,7 +3333,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
         h('div', { 'data-wb-col': '' }, ...projects.map((p) => h(ProjectCard, {
           key: p.id, p, onChange: list.reload, autoOpen: p.id === autoOpenId,
         }))),
-        h(Note, {}, '出片设置（音色 / 时长 / 是否用真实帧）在「刷 B 站 → 设置」和每张卡片的「开始渲染」里调。'),
+        h(Note, {}, '出片设置（音色 / 时长 / 是否用真实帧）在「设置 → 配音」和每张卡片的「开始渲染」里调。'),
         )
     }
 
@@ -3880,10 +3813,19 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
 
         h(Sec, { title: '模型顺序' },
           h('div', { 'data-wb-kv': '' }, (cfg?.modelChain || []).map((m, i) => h('div', { key: i }, `${i + 1}. ${m}`))),
-          h(Note, {}, '在「刷 B 站 → 设置 → 模型顺序」里改。失败自动切换下一个。')),
+          h(Note, {}, '在「设置 → 模型管理」里改。失败自动切换下一个。')),
 
         h(MemorySec),
         h(Err, {}, cfgRes.err))
+    }
+
+    /* ═══════════════════ 设置（顶层） ═══════════════════ */
+    function TabSettings() {
+      const cfgRes = useApi('/config')
+      return h('div', { 'data-wb-page': '' },
+        h('div', { 'data-wb-sticky-header': '' },
+          h(PageHead, { title: '设置', sub: '模型管理、采集、人设与互动、界面' })),
+        h(SubSettings, { onRunRound: () => {}, onSaved: () => cfgRes.reload() }))
     }
 
     /* ═══════════════════ 外壳 ═══════════════════ */
@@ -3893,6 +3835,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       ['scroll', '刷 B 站'],
       ['create', '创作出片'],
       ['review', '审核发布'],
+      ['settings', '设置'],
       ['mine', '我的'],
     ]
     const ASSET_TABS = [
@@ -3911,6 +3854,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       ['scroll', 'play', '刷 B 站'],
       ['create', 'pen', '创作出片'],
       ['review', 'check', '审核发布'],
+      ['settings', 'gear', '设置'],
       ['mine', 'user', '我的'],
     ]
 
@@ -3930,6 +3874,10 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       check: [
         h('circle', { key: 'a', cx: 12, cy: 12, r: 9 }),
         h('path', { key: 'b', d: 'm8.5 12 2.5 2.5 4.5-5' }),
+      ],
+      gear: [
+        h('circle', { key: 'a', cx: 12, cy: 12, r: 3.2 }),
+        h('path', { key: 'b', d: 'M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.6a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z' }),
       ],
       user: [
         h('circle', { key: 'a', cx: 12, cy: 8, r: 3.5 }),
@@ -3952,7 +3900,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
       const visibleTabs = useMemo(() => {
         const raw = shellCfg.data?.config?.ui?.tabs
         const list = Array.isArray(raw) && raw.length ? raw : UI_TABS.map(([k]) => k)
-        return UI_TABS.filter(([k]) => list.includes(k) || k === 'mine')
+        return NAV.filter(([k]) => list.includes(k) || k === 'mine' || k === 'settings')
       }, [shellCfg.data])
       // 当前页被隐藏（或初始值不在可见列表里）时回落到第一个可见页
       useEffect(() => {
@@ -4008,9 +3956,10 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
             h('button', { 'data-wb-ghost': '', onClick: () => setCollapsed(!collapsed) }, collapsed ? '»' : '« 收起'))),
         h('main', { 'data-wb-main': '' },
           tab === 'store' ? h(TabStore) : null,
-          tab === 'scroll' ? h(TabScroll) : null,
-          tab === 'create' ? h(TabCreate) : null,
+          tab === 'scroll' ? h(TabScroll, { go: setTab }) : null,
+          tab === 'create' ? h(TabCreate, { go: setTab }) : null,
           tab === 'review' ? h(TabReview) : null,
+          tab === 'settings' ? h(TabSettings) : null,
           tab === 'mine' ? h(TabMine) : null))
     }
 

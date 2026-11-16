@@ -314,7 +314,7 @@ function normalizeCfg(c) {
   if (!out.defaultTags.length) out.defaultTags = ['资讯', '盘点']
   out.defaultZone = clampNum(out.defaultZone, 0, 9999, 0)
   /* 界面：哪些模块 / 素材分类要显示。「我的」是设置入口，永远保留。 */
-  const TAB_IDS = ['store', 'scroll', 'create', 'review', 'mine']
+  const TAB_IDS = ['store', 'scroll', 'create', 'review', 'settings', 'mine']
   const ASSET_TAB_IDS = ['video', 'voice', 'font', 'clip', 'meme', 'bgm', 'sticker', 'aivideo', 'aiimage']
   const ui = out.ui && typeof out.ui === 'object' ? out.ui : {}
   const pick = (raw, all) => {
@@ -323,6 +323,7 @@ function normalizeCfg(c) {
   }
   const tabs = pick(ui.tabs, TAB_IDS)
   if (!tabs.includes('mine')) tabs.push('mine')
+  if (!tabs.includes('settings')) tabs.splice(tabs.indexOf('mine'), 0, 'settings')
   out.ui = { tabs, assetTabs: pick(ui.assetTabs, ASSET_TAB_IDS) }
   return out
 }
