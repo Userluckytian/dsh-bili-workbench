@@ -1801,6 +1801,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           dmWatch: draft.dmWatch, dmWatchMinutes: draft.dmWatchMinutes,
           voice: draft.voice, modelChain: String(draft.modelChainText || '').split('\n').map((s) => s.trim()).filter(Boolean),
           visionChain: String(draft.visionChainText || '').split('\n').map((s) => s.trim()).filter(Boolean),
+          ui: draft.ui,
         })
         setBusy('')
         if (r.ok) {
@@ -3820,12 +3821,12 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
     }
 
     /* ═══════════════════ 设置（顶层） ═══════════════════ */
-    function TabSettings() {
+    function TabSettings({ onSaved }) {
       const cfgRes = useApi('/config')
       return h('div', { 'data-wb-page': '' },
         h('div', { 'data-wb-sticky-header': '' },
           h(PageHead, { title: '设置', sub: '模型管理、采集、人设与互动、界面' })),
-        h(SubSettings, { onRunRound: () => {}, onSaved: () => cfgRes.reload() }))
+        h(SubSettings, { onRunRound: () => {}, onSaved: () => { cfgRes.reload(); onSaved?.() } }))
     }
 
     /* ═══════════════════ 外壳 ═══════════════════ */
@@ -3959,7 +3960,7 @@ button[data-wb-fact]:hover{border-color:var(--wb-line2);color:var(--wb-tx);}
           tab === 'scroll' ? h(TabScroll, { go: setTab }) : null,
           tab === 'create' ? h(TabCreate, { go: setTab }) : null,
           tab === 'review' ? h(TabReview) : null,
-          tab === 'settings' ? h(TabSettings) : null,
+          tab === 'settings' ? h(TabSettings, { onSaved: () => shellCfg.reload() }) : null,
           tab === 'mine' ? h(TabMine) : null))
     }
 
